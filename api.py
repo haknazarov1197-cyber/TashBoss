@@ -204,6 +204,13 @@ if tg_app:
     # Установка Telegram Webhook (это нужно для корректной работы)
     @app.on_event("startup")
     async def startup_event():
+        # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Инициализация Application перед использованием post_update
+        try:
+            await tg_app.initialize()
+            logger.info("Telegram Application инициализирован для асинхронной работы.")
+        except Exception as e:
+            logger.error(f"Ошибка при инициализации Telegram Application: {e}")
+
         base_url = os.getenv("BASE_URL")
         if base_url:
             webhook_url = f"{base_url}/bot_webhook"
@@ -235,6 +242,7 @@ if tg_app:
             update_obj = Update.de_json(data=body, bot=tg_app.bot) 
             # ИСПРАВЛЕНО: Вместо использования внутренней очереди (update_queue) 
             # используем официальный метод post_update, который обрабатывает обновления.
+            # Теперь работает, так как Application инициализирован (initialize() в startup_event).
             await tg_app.post_update(update_obj) 
             return {"status": "ok"}
         except Exception as e:
