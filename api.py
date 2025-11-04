@@ -214,13 +214,10 @@ async def set_telegram_webhook():
             await asyncio.sleep(random.uniform(0.1, 1.0))
 
             try:
-                # Проверим текущий вебхук и обновим только при необходимости для экономии запросов
-                current_webhook = await tg_app.bot.get_webhook_info()
-                if current_webhook.url != webhook_url:
-                    await tg_app.bot.set_webhook(url=webhook_url)
-                    logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
-                else:
-                    logger.info("Telegram Webhook уже установлен корректно. Пропуск.")
+                # !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Всегда принудительно устанавливаем вебхук.
+                # Это гарантирует, что Telegram знает наш актуальный URL после перезапуска.
+                await tg_app.bot.set_webhook(url=webhook_url)
+                logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
             except telegram_error.RetryAfter as e:
                 logger.warning(f"Ошибка Rate Limit при установке вебхука: {e}. Продолжаем работу.")
             except Exception as e:
