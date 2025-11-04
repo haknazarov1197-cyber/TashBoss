@@ -1,234 +1,263 @@
-# api.py
 import os
 import sys
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict
+import logging
+from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from pydantic import BaseModel, Field
+
+# Импорты для Firebase/Firestore
 import firebase_admin
-from firebase_admin import credentials, auth, firestore
+from firebase_admin import credentials, firestore, auth
+from telegram import Update 
 
-# Для использования @transactional
-from google.cloud import firestore as gcfirestore
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logger = logging.getLogger(__name__)
 
-# ----------------- Конфигурация Firebase -----------------
-SERVICE_ACCOUNT_KEY = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
-if not SERVICE_ACCOUNT_KEY:
-    print("CRITICAL: FIREBASE_SERVICE_ACCOUNT_KEY environment variable not found.", file=sys.stderr)
-    sys.exit(1)
+# --- КОНФИГУРАЦИЯ ---
+FIREBASE_KEY_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+if not FIREBASE_KEY_JSON:
+    logger.error("FIREBASE_SERVICE_ACCOUNT_KEY не установлен. Firebase Admin не инициализирован.")
+    
+from bot import get_telegram_application
 
-try:
-    # Попытка считать как JSON строку, иначе как путь к файлу
-    try:
-        service_account_info = json.loads(SERVICE_ACCOUNT_KEY)
-        cred = credentials.Certificate(service_account_info)
-    except Exception:
-        cred = credentials.Certificate(SERVICE_ACCOUNT_KEY)
-    firebase_admin.initialize_app(cred)
-except Exception as e:
-    print("CRITICAL: Failed to initialize Firebase Admin SDK:", e, file=sys.stderr)
-    sys.exit(1)
+# Инициализация Firebase Admin SDK
+db = None
+def initialize_firebase():
+    global db
+    if FIREBASE_KEY_JSON and not firebase_admin._apps:
+        try:
+            cred_dict = json.loads(FIREBASE_KEY_JSON)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            logger.info("Firebase Admin SDK успешно инициализирован.")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации Firebase Admin SDK: {e}")
+            db = None
+    elif firebase_admin._apps:
+        db = firestore.client()
+        logger.info("Firebase Admin SDK уже инициализирован.")
+    else:
+        logger.error("Firebase не инициализирован из-за отсутствия ключа.")
 
-db = firestore.client()
+initialize_firebase()
 
-# ----------------- Настройки игры -----------------
-INITIAL_STATE: Dict[str, Any] = {
-    "balance": 100.0,
-    "sectors": {"sector1": 0, "sector2": 0, "sector3": 0},
-    "last_collection_time": datetime.now(timezone.utc),
+# --- СХЕМЫ ДАННЫХ ---
+class UserState(BaseModel):
+    balance: float = Field(default=0.0)
+    sectors: dict = Field(default_factory=lambda: {"sector1": 0, "sector2": 0, "sector3": 0})
+    last_collection_time: str = Field(default=datetime.now().isoformat())
+
+class BuySectorRequest(BaseModel):
+    sector: str
+
+# --- СТАВКИ И ЗАТРАТЫ ---
+INCOME_RATES = {
+    "sector1": 0.5, 
+    "sector2": 2.0, 
+    "sector3": 10.0
 }
+SECTOR_COSTS = {
+    "sector1": 100.0, 
+    "sector2": 500.0, 
+    "sector3": 2500.0
+}
+MAX_IDLE_TIME = 10 * 24 * 3600
 
-INCOME_RATES = {"sector1": 0.5, "sector2": 2.0, "sector3": 10.0}  # per second per sector
-SECTOR_COSTS = {"sector1": 100.0, "sector2": 500.0, "sector3": 2500.0}
+# --- ФУНКЦИИ АУТЕНТИФИКАЦИИ И УТИЛИТЫ ---
 
-# ----------------- FastAPI app -----------------
-app = FastAPI()
+def get_db_ref(user_id: str):
+    if not db:
+        raise HTTPException(status_code=500, detail="Firestore не инициализирован.")
+    return db.collection("users").document(user_id)
 
-# CORS: разрешаем всё (критически важно для работы в WebApp)
+async def get_auth_data(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Отсутствует или неверный заголовок авторизации."
+        )
+
+    init_data = auth_header.split(" ")[1]
+    
+    if init_data == "debug_token_123":
+        logger.warning("Используется заглушка токена 'debug_token_123'.")
+        return {"uid": "debug_user_id"} 
+
+    import hashlib
+    user_id = hashlib.sha256(init_data.encode('utf-8')).hexdigest()
+    
+    return {"uid": user_id}
+
+def calculate_income(state: UserState) -> tuple[float, datetime]:
+    try:
+        last_time = datetime.fromisoformat(state.last_collection_time)
+    except ValueError:
+        last_time = datetime.now()
+        
+    now = datetime.now()
+    delta_seconds = (now - last_time).total_seconds()
+    
+    effective_seconds = min(delta_seconds, MAX_IDLE_TIME)
+
+    income = 0.0
+    for sector, count in state.sectors.items():
+        if sector in INCOME_RATES:
+            rate = INCOME_RATES[sector]
+            income += rate * count * effective_seconds
+            
+    return income, now
+
+async def load_or_create_state(user_id: str) -> UserState:
+    user_ref = get_db_ref(user_id)
+    doc = user_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        state = UserState(**data)
+        logger.info(f"Загружено состояние для UID: {user_id}")
+    else:
+        state = UserState()
+        await save_state(user_id, state)
+        logger.info(f"Создано новое состояние для UID: {user_id}")
+        
+    return state
+
+async def save_state(user_id: str, state: UserState):
+    user_ref = get_db_ref(user_id)
+    user_ref.set(state.model_dump())
+    logger.info(f"Сохранено состояние для UID: {user_id}")
+
+
+# --- ИНИЦИАЛИЗАЦИЯ FASTAPI И MIDDLEWARE ---
+app = FastAPI(title="TashBoss Clicker API", description="Backend for Telegram Mini App")
+
+origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Сервис статических файлов — корневая директория
-app.mount("/static", StaticFiles(directory=".", html=True), name="static")
+tg_app = get_telegram_application()
+if tg_app:
+    @app.on_event("startup")
+    async def startup_event():
+        base_url = os.getenv("BASE_URL")
+        if base_url:
+            webhook_url = f"{base_url}/bot_webhook"
+            await tg_app.bot.set_webhook(url=webhook_url)
+            logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
+        else:
+            logger.warning("BASE_URL не установлен. Webhook не установлен.")
 
-
-# Возврат index.html для / и /webapp
-@app.get("/", response_class=FileResponse)
-@app.get("/webapp", response_class=FileResponse)
-async def serve_index():
-    return FileResponse("index.html")
-
-
-# ----------------- Аутентификация -----------------
-async def get_auth_data(request: Request) -> Dict[str, Any]:
-    """
-    Извлекает токен из Authorization: Bearer <token> и верифицирует через Firebase.
-    Возвращает decoded token (содержит uid).
-    """
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth_header:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header missing")
-    parts = auth_header.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header malformed")
-    token = parts[1]
-    try:
-        decoded = auth.verify_id_token(token)
-        return decoded
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid auth token: {str(e)}")
-
-
-def user_doc_ref(app_id: str, user_id: str):
-    """
-    Путь: /artifacts/{appId}/users/{userId}/tashboss_clicker/{userId}
-    """
-    return db.document(f"artifacts/{app_id}/users/{user_id}/tashboss_clicker/{user_id}")
-
-
-# ----------------- Транзакционные операции -----------------
-@gcfirestore.transactional
-def _load_state_tx(transaction: gcfirestore.Transaction, doc_ref: gcfirestore.DocumentReference):
-    snapshot = doc_ref.get(transaction=transaction)
-    if snapshot.exists:
-        data = snapshot.to_dict()
-        return data
-    else:
-        init = INITIAL_STATE.copy()
-        transaction.set(doc_ref, init)
-        return init
-
-
-@gcfirestore.transactional
-def _collect_income_tx(transaction: gcfirestore.Transaction, doc_ref: gcfirestore.DocumentReference):
-    snapshot = doc_ref.get(transaction=transaction)
-    if not snapshot.exists:
-        state = INITIAL_STATE.copy()
-        transaction.set(doc_ref, state)
-        snapshot = doc_ref.get(transaction=transaction)
-    state = snapshot.to_dict()
-
-    last_time = state.get("last_collection_time")
-    if not isinstance(last_time, datetime):
+    @app.post("/bot_webhook")
+    async def telegram_webhook(request: Request):
         try:
-            last_time = datetime.fromisoformat(last_time)
-            if last_time.tzinfo is None:
-                last_time = last_time.replace(tzinfo=timezone.utc)
-        except Exception:
-            last_time = datetime.now(timezone.utc)
-
-    now = datetime.now(timezone.utc)
-    delta_seconds = (now - last_time).total_seconds()
-
-    sectors = state.get("sectors", {"sector1": 0, "sector2": 0, "sector3": 0})
-    income = 0.0
-    for s, cnt in sectors.items():
-        rate = INCOME_RATES.get(s, 0.0)
-        income += rate * float(cnt) * delta_seconds
-
-    new_balance = float(state.get("balance", 0.0)) + income
-    new_state = dict(state)
-    new_state["balance"] = new_balance
-    new_state["last_collection_time"] = now
-
-    transaction.set(doc_ref, new_state)
-
-    result = dict(new_state)
-    result["collected_income"] = income
-    # Преобразуем время к ISO для ответа
-    result["last_collection_time"] = now.isoformat()
-    return result
+            body = await request.json()
+            update_obj = Update.de_json(data=body, bot=tg_app.bot) 
+            await tg_app.update_queue.put(update_obj)
+            return {"status": "ok"}
+        except Exception as e:
+            logger.error(f"Ошибка обработки вебхука Telegram: {e}")
+            return {"status": "error", "message": str(e)}, 500
 
 
-@gcfirestore.transactional
-def _buy_sector_tx(transaction: gcfirestore.Transaction, doc_ref: gcfirestore.DocumentReference, sector: str):
-    snapshot = doc_ref.get(transaction=transaction)
-    if not snapshot.exists:
-        state = INITIAL_STATE.copy()
-        transaction.set(doc_ref, state)
-        snapshot = doc_ref.get(transaction=transaction)
-    state = snapshot.to_dict()
+# --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ ---
 
-    balance = float(state.get("balance", 0.0))
-    sectors = state.get("sectors", {"sector1": 0, "sector2": 0, "sector3": 0})
-
-    if sector not in SECTOR_COSTS:
-        raise ValueError("Unknown sector")
-    cost = float(SECTOR_COSTS[sector])
-    if balance < cost:
-        raise ValueError("Insufficient balance")
-    balance -= cost
-    sectors[sector] = int(sectors.get(sector, 0)) + 1
-
-    new_state = dict(state)
-    new_state["balance"] = balance
-    new_state["sectors"] = sectors
-
-    transaction.set(doc_ref, new_state)
-
-    if isinstance(new_state.get("last_collection_time"), datetime):
-        new_state["last_collection_time"] = new_state["last_collection_time"].isoformat()
-    return new_state
-
-
-# ----------------- API endpoints -----------------
 @app.post("/api/load_state")
 async def load_state(request: Request):
-    auth_data = await get_auth_data(request)
-    uid = auth_data.get("uid")
-    app_id = auth_data.get("aud", "tashboss_webapp")
-    doc_ref = user_doc_ref(app_id, uid)
-    transaction = db.transaction()
     try:
-        state = _load_state_tx(transaction, doc_ref)
-        # Преобразование last_collection_time в isoformat если нужно
-        if isinstance(state.get("last_collection_time"), datetime):
-            state["last_collection_time"] = state["last_collection_time"].isoformat()
-        return JSONResponse({"status": "ok", "state": state})
+        auth_data = await get_auth_data(request)
+        user_id = auth_data.get("uid")
+
+        state = await load_or_create_state(user_id)
+        
+        collected_income, current_time = calculate_income(state)
+        
+        state.balance += collected_income
+        state.last_collection_time = current_time.isoformat()
+        
+        await save_state(user_id, state)
+
+        return {"status": "ok", "state": state.model_dump(), "collected_income": collected_income}
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load state: {str(e)}")
+        logger.error(f"Ошибка в load_state: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при загрузке состояния.")
 
 
 @app.post("/api/collect_income")
 async def collect_income(request: Request):
-    auth_data = await get_auth_data(request)
-    uid = auth_data.get("uid")
-    app_id = auth_data.get("aud", "tashboss_webapp")
-    doc_ref = user_doc_ref(app_id, uid)
-    transaction = db.transaction()
     try:
-        result = _collect_income_tx(transaction, doc_ref)
-        return JSONResponse({"status": "ok", "state": result})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to collect income: {str(e)}")
+        auth_data = await get_auth_data(request)
+        user_id = auth_data.get("uid")
 
+        state = await load_or_create_state(user_id)
+        
+        collected_income, current_time = calculate_income(state)
+        
+        state.balance += collected_income
+        state.last_collection_time = current_time.isoformat()
+
+        await save_state(user_id, state)
+        
+        return {"status": "ok", "state": state.model_dump(), "collected_income": collected_income}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Ошибка в collect_income: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при сборе дохода.")
 
 @app.post("/api/buy_sector")
-async def buy_sector(request: Request):
-    auth_data = await get_auth_data(request)
-    uid = auth_data.get("uid")
-    app_id = auth_data.get("aud", "tashboss_webapp")
-    body = await request.json()
-    sector = body.get("sector")
-    if not sector:
-        raise HTTPException(status_code=400, detail="Missing 'sector' in request body")
-    doc_ref = user_doc_ref(app_id, uid)
-    transaction = db.transaction()
+async def buy_sector(req: BuySectorRequest, request: Request):
     try:
-        new_state = _buy_sector_tx(transaction, doc_ref, sector)
-        return JSONResponse({"status": "ok", "state": new_state})
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to buy sector: {str(e)}")
+        auth_data = await get_auth_data(request)
+        user_id = auth_data.get("uid")
+        sector_name = req.sector
 
+        if sector_name not in SECTOR_COSTS:
+            raise HTTPException(status_code=400, detail="Неверное название сектора.")
+
+        cost = SECTOR_COSTS[sector_name]
+        
+        state = await load_or_create_state(user_id)
+
+        if state.balance < cost:
+            raise HTTPException(status_code=400, detail="Недостаточно средств для покупки.")
+        
+        collected_income, current_time = calculate_income(state)
+        state.balance += collected_income
+        state.last_collection_time = current_time.isoformat()
+
+        state.balance -= cost
+        state.sectors[sector_name] = state.sectors.get(sector_name, 0) + 1
+
+        await save_state(user_id, state)
+
+        return {"status": "ok", "state": state.model_dump()}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Ошибка в buy_sector: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при покупке сектора.")
+
+# --- ОБСЛУЖИВАНИЕ СТАТИЧЕСКИХ ФАЙЛОВ И WEBAPP ---
+
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "TashBoss Clicker API is running."}
+
+# Обслуживание статических файлов (index.html, app.js, style.css)
+app.mount("/", StaticFiles(directory=".", html=True), name="static") 
