@@ -134,7 +134,8 @@ def get_db_ref(user_id: str):
     if not db:
         # Если Firebase не инициализирован (нет ключа), все API-запросы провалятся
         raise HTTPException(status_code=500, detail="Firestore не инициализирован. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY.")
-    return db.collection("users").document(user_id)
+    # Использование пути 'users' как корневой коллекции
+    return db.collection("users").document(user_id) 
 
 async def get_auth_data(request: Request) -> dict:
     """Верифицирует токен Telegram Mini App из заголовка Authorization."""
@@ -203,19 +204,17 @@ async def save_state(user_id: str, state: UserState):
 async def set_telegram_webhook():
     """
     Выполняет установку вебхука асинхронно, не блокируя запуск Gunicorn.
-    Это помогает избежать тайм-аута Render.
     """
     if tg_app:
         base_url = os.getenv("BASE_URL")
         if base_url:
             webhook_url = f"{base_url}/bot_webhook"
             
-            # Добавим небольшую случайную задержку, чтобы избежать одновременного удара по API
+            # Добавим небольшую случайную задержку
             await asyncio.sleep(random.uniform(0.1, 1.0))
 
             try:
-                # !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Всегда принудительно устанавливаем вебхук.
-                # Это гарантирует, что Telegram знает наш актуальный URL после перезапуска.
+                # !!! Принудительно устанавливаем вебхук.
                 await tg_app.bot.set_webhook(url=webhook_url)
                 logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
             except telegram_error.RetryAfter as e:
@@ -229,15 +228,12 @@ async def set_telegram_webhook():
 if tg_app:
     @app.on_event("startup")
     async def startup_event():
-        # 1. КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Инициализация Application (быстрая, синхронная часть)
         try:
-            # initialize() — это быстрый вызов, который подготавливает внутренние структуры.
             await tg_app.initialize()
             logger.info("Telegram Application инициализирован для асинхронной работы.")
         except Exception as e:
             logger.error(f"Ошибка при инициализации Telegram Application: {e}")
         
-        # 2. ВЫНЕСЕНО: Запускаем установку вебхука как фоновую задачу (не блокирует запуск Uvicorn)
         asyncio.create_task(set_telegram_webhook())
         logger.info("Задача установки Webhook запущена в фоне.")
 
@@ -247,18 +243,20 @@ if tg_app:
     async def telegram_webhook(request: Request):
         try:
             body = await request.json()
-            # --- ВРЕМЕННЫЙ ЛОГ ДЛЯ ОТЛАДКИ ---
+            # Лог для отладки
             logger.info(f"Получен входящий JSON от Telegram: {json.dumps(body)}")
-            # --- КОНЕЦ ЛОГА ---
-
+            
             update_obj = Update.de_json(data=body, bot=tg_app.bot) 
-            # Обработка обновления
-            await tg_app.post_update(update_obj) 
+            
+            # --- ИСПРАВЛЕНИЕ: Используем process_update вместо post_update ---
+            # process_update запускает обработчики (CommandHandler)
+            await tg_app.process_update(update_obj) 
+            
             return {"status": "ok"}
         except Exception as e:
+            # Логируем ошибку, но возвращаем 200 OK, чтобы Telegram не переотправлял обновление
             logger.error(f"Ошибка обработки вебхука Telegram: {e}")
-            return {"status": "error", "message": str(e)}, 500
-
+            return {"status": "error", "message": str(e)}, 200 # Возвращаем 200 для Telegram
 
 # --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ ---
 @app.post("/api/load_state")
@@ -350,6 +348,4 @@ def read_root():
     return {"status": "ok", "message": "TashBoss Clicker API is running."}
 
 # Обслуживание статических файлов (index.html, app.js, style.css)
-# Это КРИТИЧЕСКИ ВАЖНО для устранения ошибки 404!
-# Мы монтируем статические файлы в корень, но используем health_check для Render.
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
