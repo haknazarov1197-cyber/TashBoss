@@ -3,454 +3,69 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss: Мини-Приложение</title>
+    <title>Tashboss Clicker</title>
+    <!-- Загрузка Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        // Конфигурация Tailwind для кастомизации цветов
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        'primary': '#0a5b8f', // Темно-синий
-                        'secondary': '#10a08e', // Бирюзовый
-                        'background': '#1f2937', // Темный фон
-                        'card-bg': '#374151', // Фон карточек
-                    },
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                    },
-                }
-            }
-        }
-    </script>
+    <!-- Загрузка Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        /* Настройка шрифта Inter и базовый скролл */
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #1f2937;
-            color: #f3f4f6;
+            background-color: #f0f4f8; /* Светлый фон */
+            color: #1a202c;
             min-height: 100vh;
+            display: flex;
+            justify-content: center;
         }
-        .card {
-            background-color: #374151;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
-            transition: transform 0.2s;
-        }
-        .card:hover {
-            transform: translateY(-2px);
-        }
-        .btn-primary {
-            background-color: #10b981; /* Зеленый */
-            color: white;
-            transition: background-color 0.1s;
-        }
-        .btn-primary:hover:not(:disabled) {
-            background-color: #059669;
-        }
-        .btn-secondary {
-            background-color: #3b82f6; /* Синий */
-            color: white;
-            transition: background-color 0.1s;
-        }
-        .btn-secondary:hover:not(:disabled) {
-            background-color: #2563eb;
-        }
-        .btn-tertiary {
-            background-color: #f59e0b; /* Оранжевый для менеджера */
-            color: white;
-            transition: background-color 0.1s;
-        }
-        .btn-tertiary:hover:not(:disabled) {
-            background-color: #d97706;
-        }
-        .btn-disabled {
-            background-color: #4b5563;
-            color: #9ca3af;
-            cursor: not-allowed;
-        }
-        .income-ready {
-            border: 2px solid #10b981;
-            animation: pulse-green 1.5s infinite;
-        }
-        @keyframes pulse-green {
-            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
-        }
+        /* Стили для скроллбаров в Telegram WebApp */
+        ::-webkit-scrollbar { width: 0; }
+        .card-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06); }
+        .gradient-bg { background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); }
     </style>
 </head>
-<body class="p-4 sm:p-6 pb-20">
-    <!-- Инициализация Telegram Web App -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    
-    <div id="loading" class="text-center p-12 text-gray-400">
-        <svg class="animate-spin h-8 w-8 text-secondary mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        Загрузка данных TashBoss...
-    </div>
+<body class="p-4 md:p-8">
+    <!-- Главный контейнер (центрирован, ограничен по ширине для десктопа) -->
+    <div id="app-container" class="w-full max-w-xl mx-auto space-y-6">
 
-    <div id="app-content" class="hidden max-w-2xl mx-auto">
-        
-        <!-- HEADER / BALANCE -->
-        <header class="text-center mb-6 p-4 rounded-xl bg-card-bg shadow-lg">
-            <h1 class="text-3xl font-bold text-secondary">TashBoss</h1>
-            <p class="text-sm text-gray-400 mt-1">Симулятор градоначальника</p>
-            <div class="mt-3">
-                <p class="text-xl font-semibold">💰 Баланс: <span id="player-balance">0</span> BSS</p>
+        <!-- Секция Баланса и Статуса -->
+        <header class="bg-white p-4 rounded-xl shadow-lg border-b-4 border-purple-500">
+            <p class="text-sm text-gray-500 font-medium">Ваш текущий баланс:</p>
+            <div class="flex items-center justify-between mt-1">
+                <span id="balance-display" class="text-3xl font-extrabold text-indigo-700 animate-pulse">
+                    ...Загрузка...
+                </span>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-indigo-500" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
+                    <path fill-rule="evenodd" d="M18 9H2v7a2 2 0 002 2h12a2 2 0 002-2V9zM4 14V9h12v5h-2a1 1 0 100 2h2v1H4v-1h2a1 1 0 100-2H4z" clip-rule="evenodd" />
+                </svg>
             </div>
-            <div class="mt-4 p-2 bg-gray-600 rounded-lg">
-                <h2 class="text-lg font-medium">Общий доход к сбору: <span id="total-income">0</span> BSS</h2>
-            </div>
+            <p id="total-income-display" class="text-xs text-green-600 mt-2 font-semibold"></p>
         </header>
 
-        <!-- SECTORS LIST -->
-        <main id="sectors-container" class="space-y-4"></main>
-        
+        <!-- Секция Владения Секторами -->
+        <section class="space-y-4">
+            <h2 class="text-xl font-bold text-gray-800 border-b pb-2 border-indigo-200">Ваши Секторы (Управление)</h2>
+            <div id="sectors-container" class="space-y-3">
+                <!-- Сектора будут вставлены здесь через JS -->
+                <div class="text-center p-6 bg-white rounded-xl shadow-md text-gray-500" id="loading-indicator">
+                    Загрузка данных секторов...
+                </div>
+            </div>
+        </section>
+
+        <!-- Секция Магазина (Доступно для покупки) -->
+        <section class="space-y-4 mt-8">
+            <h2 class="text-xl font-bold text-gray-800 border-b pb-2 border-indigo-200">Магазин (Новые Индустрии)</h2>
+            <div id="shop-container" class="space-y-3">
+                 <!-- Магазин будет вставлен здесь через JS -->
+                 <p class="text-gray-500 text-center p-4">Инициализация магазина...</p>
+            </div>
+        </section>
+
     </div>
 
-    <!-- MAIN JAVASCRIPT LOGIC -->
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        
-        let USER_ID = null;
-        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-            USER_ID = tg.initDataUnsafe.user.id;
-        } else {
-            // Заглушка для тестирования вне Telegram (должно быть удалено в продакшене)
-            USER_ID = 'TEST_USER_12345'; 
-            console.warn("Using TEST_USER_ID. Run inside Telegram Web App for real user ID.");
-        }
-
-        // ВАЖНО: URL вашего развернутого FastAPI сервера
-        const BASE_API_URL = window.location.origin;
-
-        let gameState = {
-            balance: 0,
-            industries: {}
-        };
-        let updateInterval = null;
-
-        // --- API HELPERS ---
-        async function apiFetch(endpoint, method = 'GET', body = null) {
-            const url = `${BASE_API_URL}/api/${endpoint}`;
-            try {
-                // Показываем индикатор прогресса, если это не просто загрузка состояния
-                if (endpoint !== 'load_state' && method !== 'GET') {
-                    tg.showProgress();
-                }
-
-                const response = await fetch(url, {
-                    method: method,
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: body ? JSON.stringify(body) : null,
-                });
-
-                tg.hideProgress();
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    // Обработка конкретной ошибки "Недостаточно BSS"
-                    const detail = errorData.detail || `Server error: ${response.status}`;
-                    tg.showAlert(`Ошибка: ${detail}`);
-                    throw new Error(detail);
-                }
-                return await response.json();
-            } catch (error) {
-                tg.hideProgress();
-                console.error("API Fetch Error:", error.message);
-                // Уведомление уже показано внутри обработчика response.ok
-                return null;
-            }
-        }
-        
-        // --- GAME LOGIC FUNCTIONS ---
-
-        function formatTime(seconds) {
-            if (seconds <= 0) return 'Готово!';
-            
-            const mins = Math.floor(seconds / 60);
-            const secs = seconds % 60;
-
-            let result = '';
-            if (mins > 0) {
-                result += `${mins} мин. `;
-            }
-            result += `${secs} сек.`;
-            return result.trim();
-        }
-
-        function renderSector(key, sectorData) {
-            const container = document.getElementById('sectors-container');
-            const sectorElement = document.getElementById(`sector-${key}`) || document.createElement('div');
-            sectorElement.id = `sector-${key}`;
-            
-            const level = sectorData.level;
-            const isOwned = level > 0;
-            const isManaged = sectorData.is_managed; // Новое поле
-            const nextCost = sectorData.cost;
-            const income = sectorData.income;
-            const managerCost = sectorData.manager_cost; // Новая стоимость менеджера
-            
-            // Если доход готов и нет менеджера, подсвечиваем
-            const isReadyToCollect = sectorData.income_to_collect > 0 && !isManaged;
-            sectorElement.className = `card p-4 rounded-xl ${isReadyToCollect ? 'income-ready' : ''}`;
-            
-            const config = sectorData.config; 
-            
-            let statusHTML = '';
-            let buttonsHTML = '';
-            let managerHTML = '';
-
-            if (isManaged) {
-                managerHTML = '<span class="text-sm font-semibold text-primary bg-yellow-300 px-2 py-0.5 rounded-full">✅ АВТОСБОР</span>';
-            } else if (isOwned) {
-                 managerHTML = `
-                    <button class="btn-tertiary w-full mt-2 p-2 rounded-lg font-semibold text-sm" 
-                            onclick="hireManager('${key}', ${managerCost})"
-                            ${gameState.balance < managerCost ? 'disabled' : ''}>
-                        👤 Нанять Ответственного (${managerCost.toLocaleString()} BSS)
-                    </button>
-                `;
-            }
-            
-            if (isOwned) {
-                // Рассчитываем оставшееся время для отображения таймера
-                const remaining = Math.max(0, sectorData.current_cycle_time - (Date.now() / 1000 - sectorData.last_collect) % sectorData.current_cycle_time);
-                
-                statusHTML = `
-                    <div class="flex justify-between items-center">
-                        <p class="text-lg font-bold text-secondary">${config.name} (Ур. ${level})</p>
-                        ${managerHTML}
-                    </div>
-                    <p class="text-sm text-gray-300">💰 Прибыль за цикл: ${income.toLocaleString()} BSS</p>
-                    <div class="mt-2 text-md">
-                        <p class="text-yellow-300">Накоплено: ${sectorData.income_to_collect.toLocaleString()} BSS</p>
-                        <p class="text-gray-400" id="timer-${key}">
-                            ${isManaged ? 'Автоматический сбор' : formatTime(Math.ceil(remaining))}
-                        </p>
-                    </div>
-                `;
-
-                // Кнопки для купленного сектора
-                buttonsHTML = `
-                    <button class="btn-primary w-full sm:w-1/2 p-2 rounded-lg font-semibold" 
-                            onclick="collectIncome('${key}')"
-                            ${sectorData.income_to_collect === 0 || isManaged ? 'disabled' : ''}>
-                        📥 Собрать
-                    </button>
-                    <button class="btn-secondary w-full sm:w-1/2 p-2 rounded-lg font-semibold ml-0 sm:ml-2 mt-2 sm:mt-0" 
-                            onclick="upgradeSector('${key}')"
-                            ${gameState.balance < nextCost ? 'disabled' : ''}>
-                        🚀 Улучшить (${nextCost.toLocaleString()} BSS)
-                    </button>
-                `;
-            } else {
-                // Кнопки для некупленного сектора
-                statusHTML = `
-                    <p class="text-lg font-bold text-secondary">${config.name} (Не куплен)</p>
-                    <p class="text-sm text-gray-300">Базовая прибыль: ${income.toLocaleString()} BSS</p>
-                    <p class="text-sm text-gray-300">Время цикла: ${sectorData.current_cycle_time} сек.</p>
-                `;
-
-                buttonsHTML = `
-                    <button class="btn-primary w-full p-2 rounded-lg font-semibold" 
-                            onclick="upgradeSector('${key}', true)"
-                            ${gameState.balance < nextCost ? 'disabled' : ''}>
-                        🛒 Купить (${nextCost.toLocaleString()} BSS)
-                    </button>
-                `;
-            }
-
-            sectorElement.innerHTML = `
-                ${statusHTML}
-                ${isOwned && !isManaged ? managerHTML : ''}
-                <div class="mt-4 flex flex-col sm:flex-row justify-between">
-                    ${buttonsHTML}
-                </div>
-            `;
-            
-            if (!document.getElementById(`sector-${key}`)) {
-                container.appendChild(sectorElement);
-            }
-        }
-
-        function updateUI() {
-            let totalIncome = 0;
-            const sortedKeys = Object.keys(gameState.industries).sort();
-            
-            // 1. Render Sectors
-            sortedKeys.forEach(key => {
-                const sectorData = gameState.industries[key];
-                // Учитываем только доход, который нужно собрать ВРУЧНУЮ (т.е. без менеджера)
-                if (sectorData.level > 0 && !sectorData.is_managed) {
-                    totalIncome += sectorData.income_to_collect || 0;
-                }
-                renderSector(key, sectorData);
-            });
-            
-            // 2. Update Main Headers
-            document.getElementById('player-balance').textContent = gameState.balance.toLocaleString();
-            document.getElementById('total-income').textContent = totalIncome.toLocaleString();
-
-            // 3. Update Telegram MainButton
-            if (totalIncome > 0) {
-                tg.MainButton.setText(`📥 Собрать ВЕСЬ доход (${totalIncome.toLocaleString()} BSS)`).show().enable();
-                tg.MainButton.onClick(collectAllIncome);
-            } else {
-                tg.MainButton.hide();
-            }
-
-            // 4. Show Content
-            document.getElementById('loading').classList.add('hidden');
-            document.getElementById('app-content').classList.remove('hidden');
-        }
-        
-        // --- API CALLS ---
-
-        async function loadGameState() {
-            if (!USER_ID) return;
-            
-            // При загрузке состояния мы имитируем автоматический сбор для управляемых секторов
-            const data = await apiFetch(`load_state?user_id=${USER_ID}`);
-            
-            if (data) {
-                gameState = data;
-                
-                // Запуск локального таймера, если он еще не запущен
-                if (updateInterval === null) {
-                    updateInterval = setInterval(updateLocalTimers, 1000);
-                }
-                
-                updateUI();
-            }
-        }
-
-        async function collectIncome(sectorKey) {
-            const body = { user_id: USER_ID, sector_key: sectorKey };
-            const result = await apiFetch('collect_income', 'POST', body);
-            if (result) {
-                tg.showNotification({ message: `✅ Собрано: ${result.collected_income.toLocaleString()} BSS!`, type: 'success' });
-                await loadGameState();
-            }
-        }
-
-        async function collectAllIncome() {
-            const body = { user_id: USER_ID };
-            
-            const result = await apiFetch('collect_all_income', 'POST', body);
-            
-            if (result && result.total_collected_income > 0) {
-                tg.showNotification({ message: `✅ Общий доход собран: ${result.total_collected_income.toLocaleString()} BSS!`, type: 'success' });
-                await loadGameState();
-            } else if (result) {
-                 tg.showAlert('Нет готового дохода для сбора вручную.');
-            }
-        }
-
-        async function upgradeSector(sectorKey, isPurchase = false) {
-            const body = { user_id: USER_ID, sector_key: sectorKey };
-            const result = await apiFetch('upgrade_sector', 'POST', body);
-            
-            if (result) {
-                let message = isPurchase 
-                    ? `🎉 Сектор куплен! Ваш уровень: 1.`
-                    : `🚀 Улучшение завершено! Теперь уровень: ${result.new_level}.`;
-                
-                tg.showNotification({ message: message, type: 'success' });
-                await loadGameState();
-            }
-        }
-        
-        async function hireManager(sectorKey, cost) {
-            tg.showConfirm(`Вы уверены, что хотите нанять Ответственного за ${cost.toLocaleString()} BSS? Он будет автоматически собирать доход.`, async (confirmed) => {
-                if (confirmed) {
-                    const body = { user_id: USER_ID, sector_key: sectorKey };
-                    const result = await apiFetch('hire_manager', 'POST', body);
-                    
-                    if (result) {
-                        tg.showNotification({ message: `✅ Ответственный нанят! Сбор автоматизирован.`, type: 'success' });
-                        await loadGameState();
-                    }
-                }
-            });
-        }
-
-        // --- LOCAL TIMER LOGIC ---
-        // Обновляет UI каждую секунду без обращения к серверу
-        function updateLocalTimers() {
-            const currentTimestamp = Date.now() / 1000;
-            let totalIncomeManual = 0;
-
-            Object.keys(gameState.industries).forEach(key => {
-                const sectorData = gameState.industries[key];
-                
-                if (sectorData.level > 0) {
-                    
-                    const isManaged = sectorData.is_managed;
-                    const elapsed = currentTimestamp - sectorData.last_collect;
-                    const cycleTime = sectorData.current_cycle_time;
-                    const incomePerCycle = sectorData.income; 
-                    
-                    const cyclesCompleted = Math.floor(elapsed / cycleTime);
-                    const incomeToCollect = cyclesCompleted * incomePerCycle;
-                    
-                    // Обновление UI для накопленного дохода
-                    sectorData.income_to_collect = incomeToCollect;
-
-                    if (!isManaged) {
-                        totalIncomeManual += incomeToCollect;
-                    }
-
-                    // Обновление UI для таймера и кнопок
-                    const timerElement = document.getElementById(`timer-${key}`);
-                    const collectButton = document.querySelector(`#sector-${key} button:first-child`);
-                    const cardElement = document.getElementById(`sector-${key}`);
-
-                    if (isManaged) {
-                        if (timerElement) timerElement.textContent = 'Автоматический сбор';
-                        if (collectButton) collectButton.disabled = true;
-                        if (cardElement) cardElement.classList.remove('income-ready');
-                    } else {
-                        // Для ручного сбора
-                        const remaining = Math.ceil(cycleTime - (elapsed % cycleTime));
-                        if (timerElement) {
-                            timerElement.textContent = formatTime(remaining);
-                        }
-                        
-                        if (collectButton) {
-                            collectButton.disabled = incomeToCollect === 0;
-                        }
-                        
-                        if (cardElement) {
-                            if (incomeToCollect > 0) {
-                                cardElement.classList.add('income-ready');
-                            } else {
-                                cardElement.classList.remove('income-ready');
-                            }
-                        }
-                    }
-                }
-            });
-            
-            // Обновление главного счетчика и кнопки
-            document.getElementById('total-income').textContent = totalIncomeManual.toLocaleString();
-
-            if (totalIncomeManual > 0) {
-                tg.MainButton.setText(`📥 Собрать ВЕСЬ доход (${totalIncomeManual.toLocaleString()} BSS)`).show().enable();
-                tg.MainButton.onClick(collectAllIncome);
-            } else {
-                tg.MainButton.hide();
-            }
-        }
-
-        // --- INIT ---
-        tg.onEvent('main_button_pressed', collectAllIncome);
-        loadGameState();
-    </script>
+    <!-- Здесь будет загружена наша логика app.js -->
+    <script type="module" src="./app.js"></script>
 </body>
 </html>
