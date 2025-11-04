@@ -3,39 +3,36 @@ import json
 from fastapi import FastAPI, Request, HTTPException, Response
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
+import os # Добавлено для работы с переменными окружения
 
 # --- FIREBASE ИНИЦИАЛИЗАЦИЯ ---
 # Используем глобальные переменные Canvas для конфигурации
-# Эти переменные должны быть доступны в вашей среде развертывания (Render)
 try:
     from firebase_admin import initialize_app, firestore, credentials
-    # Если запущен в Canvas, используем переданные переменные
-    if '__firebase_config' in globals() and __firebase_config:
-        firebase_config = json.loads(__firebase_config)
+    
+    # Пытаемся получить APP_ID из переменных окружения (для Render) или глобальных переменных (для Canvas)
+    app_id = os.environ.get('APP_ID') or globals().get('__app_id', 'default-app-id')
+    
+    # NOTE: В среде Render/Production лучше всего передавать учетные данные через
+    # переменную окружения, которую FastAPI загрузит как JSON строку.
+    if 'FIREBASE_CREDENTIALS_JSON' in os.environ:
+        # Загрузка учетных данных из переменной окружения Render/Prod
+        cred_json = json.loads(os.environ['FIREBASE_CREDENTIALS_JSON'])
+        cred = credentials.Certificate(cred_json)
+        firebase_app = initialize_app(cred)
+    elif '__firebase_config' in globals() and globals()['__firebase_config']:
         # Инициализация с помощью переданной конфигурации (для среды Canvas)
-        app_id = globals().get('__app_id', 'default-app-id')
-        
-        # NOTE: В реальной среде Render/Production лучше использовать 
-        # переменную окружения FIREBASE_CREDENTIALS_JSON
-        
-        # Создаем фиктивные учетные данные для инициализации, так как firestore
-        # требует их, но actual auth происходит через Canvas.
-        # В реальном приложении на Render нужно загрузить ключ сервисного аккаунта.
-        
-        # Если вы разворачиваете на Render, вам нужно использовать
-        # credentials.Certificate или credentials.ApplicationDefault()
-        
+        firebase_config = json.loads(globals()['__firebase_config'])
         try:
+            # Пытаемся использовать переданный конфиг как Service Account
             cred = credentials.Certificate(firebase_config)
             firebase_app = initialize_app(cred)
         except Exception:
-            # Fallback для тестовых сред, где нет полного сертификата
+            # Fallback для тестовых сред
             firebase_app = initialize_app()
-            
     else:
-        # Для локальной разработки без Canvas
+        # Локальная разработка
         firebase_app = initialize_app()
-        app_id = 'local-dev-app-id'
 
     db = firestore.client()
     print("Firestore Client Initialized.")
@@ -71,14 +68,18 @@ def get_sector_params(sector_key: str, level: int) -> Dict[str, Any]:
     Рассчитывает динамические параметры сектора (доход, стоимость, время цикла).
     """
     config = INDUSTRIES_CONFIG.get(sector_key)
-    if not config:
-        return {}
+    if not config or level <= 0:
+        # Возвращаем базовые данные для некупленного сектора
+        base_cost_for_buy = config["base_cost"] if config else 0
+        return {"income": 0, "cost": base_cost_for_buy, "cycle_time": config["base_cycle_time"] if config else 0}
 
     # 1. Доход: Линейный рост
     income = config["base_income"] * level
 
     # 2. Стоимость улучшения: Экспоненциальный рост
     # Cost = Base_Cost * (Level ^ 1.5)
+    # Примечание: Эта стоимость относится к ПЕРЕХОДУ на текущий 'level' (если 'level' > 1) 
+    # или к ПОКУПКЕ следующего уровня (если 'level' используется для определения стоимости улучшения)
     cost = int(config["base_cost"] * (level ** 1.5))
 
     # 3. Время цикла: Уменьшение до 50% от базового времени при MAX_LEVEL
@@ -123,15 +124,24 @@ def get_player_doc_ref(user_id: str):
 def get_initial_player_state(user_id: str) -> PlayerState:
     """Возвращает начальное состояние игрока."""
     initial_industries = {}
-    for key in INDUSTRIES_CONFIG:
-        initial_industries[key] = {"level": 0, "last_collect": 0, "current_cycle_time": INDUSTRIES_CONFIG[key]['base_cycle_time']}
     
-    # Игрок начинает с одним купленным сектором для немедленного старта
-    initial_industries["chorsu_market"]["level"] = 1
+    # 1. Инициализация всех секторов на уровне 0 с базовым временем цикла
+    for key in INDUSTRIES_CONFIG:
+        base_time = INDUSTRIES_CONFIG[key]['base_cycle_time']
+        initial_industries[key] = {"level": 0, "last_collect": 0, "current_cycle_time": base_time}
+    
+    # 2. Игрок начинает с одним купленным сектором (Уровень 1)
+    starter_key = "chorsu_market"
+    starter_level = 1
+    starter_params = get_sector_params(starter_key, starter_level)
+    
+    initial_industries[starter_key]["level"] = starter_level
+    # Используем актуальное время цикла для уровня 1
+    initial_industries[starter_key]["current_cycle_time"] = starter_params["cycle_time"]
     
     return PlayerState(
         user_id=user_id,
-        balance=1000, # Начальный баланс увеличен для возможности покупки
+        balance=1000, # Начальный баланс увеличен
         total_income=0,
         industries=initial_industries
     )
@@ -146,10 +156,11 @@ def load_player_state(user_id: str) -> PlayerState:
 
     if doc.exists:
         data = doc.to_dict()
-        # Ensure all sectors exist in state for new sectors
+        # Добавляем новые секторы, если они появились в конфиге
         for key in INDUSTRIES_CONFIG:
-            if key not in data['industries']:
+            if key not in data.get('industries', {}):
                  data['industries'][key] = {"level": 0, "last_collect": 0, "current_cycle_time": INDUSTRIES_CONFIG[key]['base_cycle_time']}
+        
         return PlayerState(**data)
     else:
         initial_state = get_initial_player_state(user_id)
@@ -176,11 +187,14 @@ def calculate_income_and_update_state(state: PlayerState, current_time: float) -
     """
     for key, sector_data in state.industries.items():
         level = sector_data["level"]
-        if level > 0:
-            params = get_sector_params(key, level)
-            cycle_time = params["cycle_time"]
-            income_per_cycle = params["income"]
-            last_collect = sector_data["last_collect"]
+        
+        # Получаем параметры для ТЕКУЩЕГО уровня
+        params = get_sector_params(key, level)
+        cycle_time = params.get("cycle_time", 0)
+        income_per_cycle = params.get("income", 0)
+
+        if level > 0 and cycle_time > 0:
+            last_collect = sector_data.get("last_collect", 0)
 
             if last_collect > 0:
                 elapsed = current_time - last_collect
@@ -189,13 +203,15 @@ def calculate_income_and_update_state(state: PlayerState, current_time: float) -
                 
                 # Обновляем состояние сектора для фронтенда
                 sector_data["income_to_collect"] = cycles_completed * income_per_cycle
-                sector_data["remaining_time"] = cycle_time - (elapsed % cycle_time) if cycles_completed == 0 else 0
-                sector_data["cycle_time"] = cycle_time # Передаем актуальное время цикла
+                
+                # Рассчитываем оставшееся время до следующего цикла
+                time_in_current_cycle = elapsed % cycle_time
+                sector_data["remaining_time"] = cycle_time - time_in_current_cycle
+                
             else:
                 # Если только что куплен (last_collect=0), считаем, что цикл только начался
                 sector_data["income_to_collect"] = 0
                 sector_data["remaining_time"] = cycle_time
-                sector_data["cycle_time"] = cycle_time
 
     return state
 
@@ -208,7 +224,7 @@ app = FastAPI(title="TashBoss Game API")
 @app.get("/webapp")
 async def serve_webapp():
     """Отдает HTML-страницу Mini App. Это эндпоинт, который должен открывать бот."""
-    # Полный HTML-код для index.html, который вы предоставили ранее
+    # Полный HTML-код для index.html
     html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -329,7 +345,7 @@ async def serve_webapp():
         if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
             USER_ID = tg.initDataUnsafe.user.id;
         } else {
-            // Заглушка для тестирования вне Telegram (должно быть удалено в продакшене)
+            // Заглушка для тестирования вне Telegram 
             USER_ID = 'TEST_USER_12345'; 
             console.warn("Using TEST_USER_ID. Run inside Telegram Web App for real user ID.");
         }
@@ -357,6 +373,8 @@ async def serve_webapp():
 
                 if (!response.ok) {
                     const errorData = await response.json();
+                    // Отключаем MainButton при ошибке, чтобы он не мешал
+                    tg.MainButton.hide(); 
                     throw new Error(errorData.detail || `Server error: ${response.status}`);
                 }
                 return await response.json();
@@ -371,13 +389,20 @@ async def serve_webapp():
 
         function formatTime(seconds) {
             if (seconds <= 0) return 'Готово!';
-            return `${seconds} сек.`;
+            // Используем Math.floor, чтобы не отображать 0, пока не пройдет полная секунда
+            return `${Math.floor(seconds)} сек.`; 
         }
 
         function renderSector(key, sectorData) {
             const container = document.getElementById('sectors-container');
-            const sectorElement = document.getElementById(`sector-${key}`) || document.createElement('div');
-            sectorElement.id = `sector-${key}`;
+            let sectorElement = document.getElementById(`sector-${key}`);
+
+            if (!sectorElement) {
+                sectorElement = document.createElement('div');
+                sectorElement.id = `sector-${key}`;
+                container.appendChild(sectorElement);
+            }
+            
             sectorElement.className = `card p-4 rounded-xl ${sectorData.income_to_collect > 0 ? 'income-ready' : ''}`;
             
             const config = sectorData.config; // Configuration from API
@@ -389,15 +414,18 @@ async def serve_webapp():
             let statusHTML = '';
             let buttonsHTML = '';
 
+            // Определяем оставшееся время для UI
+            const remaining = sectorData.remaining_time || (sectorData.level > 0 ? sectorData.current_cycle_time : '—');
+            
             if (isOwned) {
-                const remaining = Math.max(0, sectorData.current_cycle_time - (Date.now() / 1000 - sectorData.last_collect) % sectorData.current_cycle_time);
                 
                 statusHTML = `
                     <p class="text-lg font-bold text-secondary">${config.name} (Ур. ${level})</p>
                     <p class="text-sm text-gray-300">💰 Прибыль за цикл: ${income} BSS</p>
+                    <p class="text-sm text-gray-300">⏱ Время цикла: ${sectorData.current_cycle_time} сек.</p>
                     <div class="mt-2 text-md">
-                        <p class="text-yellow-300">Накоплено: ${sectorData.income_to_collect} BSS</p>
-                        <p class="text-gray-400" id="timer-${key}">${formatTime(Math.ceil(remaining))}</p>
+                        <p class="text-yellow-300">Накоплено: ${sectorData.income_to_collect.toLocaleString()} BSS</p>
+                        <p class="text-gray-400" id="timer-${key}">Осталось: ${formatTime(remaining)}</p>
                     </div>
                 `;
 
@@ -411,22 +439,29 @@ async def serve_webapp():
                     <button class="btn-secondary w-full sm:w-1/2 p-2 rounded-lg font-semibold ml-0 sm:ml-2 mt-2 sm:mt-0" 
                             onclick="upgradeSector('${key}')"
                             ${gameState.balance < nextCost ? 'disabled' : ''}>
-                        🚀 Улучшить (${nextCost} BSS)
+                        🚀 Улучшить (${nextCost.toLocaleString()} BSS)
                     </button>
                 `;
             } else {
                 // Кнопки для некупленного сектора
+                const baseIncome = sectorData.income || sectorData.config.base_income;
+                const baseCycleTime = sectorData.current_cycle_time;
+                
                 statusHTML = `
                     <p class="text-lg font-bold text-secondary">${config.name} (Не куплен)</p>
-                    <p class="text-sm text-gray-300">Базовая прибыль: ${income} BSS</p>
-                    <p class="text-sm text-gray-300">Время цикла: ${sectorData.current_cycle_time} сек.</p>
+                    <p class="text-sm text-gray-300">Базовая прибыль (Ур. 1): ${baseIncome} BSS</p>
+                    <p class="text-sm text-gray-300">Базовое время цикла: ${baseCycleTime} сек.</p>
+                    <div class="mt-2 text-md">
+                        <p class="text-yellow-300">Накоплено: 0 BSS</p>
+                        <p class="text-gray-400">Осталось: —</p>
+                    </div>
                 `;
 
                 buttonsHTML = `
                     <button class="btn-primary w-full p-2 rounded-lg font-semibold" 
                             onclick="upgradeSector('${key}', true)"
                             ${gameState.balance < nextCost ? 'disabled' : ''}>
-                        🛒 Купить (${nextCost} BSS)
+                        🛒 Купить (${nextCost.toLocaleString()} BSS)
                     </button>
                 `;
             }
@@ -438,14 +473,15 @@ async def serve_webapp():
                 </div>
             `;
             
-            if (!document.getElementById(`sector-${key}`)) {
-                container.appendChild(sectorElement);
-            }
         }
 
         function updateUI() {
             let totalIncome = 0;
-            const sortedKeys = Object.keys(gameState.industries).sort();
+            const sortedKeys = Object.keys(gameState.industries).sort((a, b) => {
+                const indexA = parseInt(gameState.industries[a].config.name.split('.')[0]);
+                const indexB = parseInt(gameState.industries[b].config.name.split('.')[0]);
+                return indexA - indexB;
+            });
             
             // 1. Render Sectors
             sortedKeys.forEach(key => {
@@ -463,7 +499,7 @@ async def serve_webapp():
             // 3. Update Telegram MainButton
             if (totalIncome > 0) {
                 tg.MainButton.setText(`📥 Собрать ВЕСЬ доход (${totalIncome.toLocaleString()} BSS)`).show().enable();
-                tg.MainButton.onClick(collectAllIncome);
+                // Обработчик MainButton устанавливается в INIT, поэтому здесь только показываем/обновляем
             } else {
                 tg.MainButton.hide();
             }
@@ -487,6 +523,8 @@ async def serve_webapp():
                 
                 // Запуск локального таймера, если он еще не запущен
                 if (updateInterval === null) {
+                    // Вызываем updateLocalTimers сразу, а затем по интервалу
+                    updateLocalTimers(); 
                     updateInterval = setInterval(updateLocalTimers, 1000);
                 }
                 
@@ -495,10 +533,13 @@ async def serve_webapp():
         }
 
         async function collectIncome(sectorKey) {
+            tg.MainButton.showProgress();
             const body = { user_id: USER_ID, sector_key: sectorKey };
             const result = await apiFetch('collect_income', 'POST', body);
+            tg.MainButton.hideProgress();
+
             if (result) {
-                tg.showNotification({ message: `✅ Собрано: ${result.collected_income} BSS!`, type: 'success' });
+                tg.showNotification({ message: `✅ Собрано: ${result.collected_income.toLocaleString()} BSS!`, type: 'success' });
                 // Перезагружаем состояние с сервера
                 await loadGameState();
             }
@@ -514,18 +555,28 @@ async def serve_webapp():
             tg.MainButton.hideProgress();
             
             if (result) {
-                tg.showNotification({ message: `✅ Общий доход собран: ${result.total_collected_income} BSS!`, type: 'success' });
+                if (result.total_collected_income > 0) {
+                    tg.showNotification({ message: `✅ Общий доход собран: ${result.total_collected_income.toLocaleString()} BSS!`, type: 'success' });
+                } else {
+                    tg.showAlert(`Нет готового дохода для сбора.`);
+                }
                 await loadGameState();
             }
         }
 
         async function upgradeSector(sectorKey, isPurchase = false) {
             const body = { user_id: USER_ID, sector_key: sectorKey };
+            
+            // Включаем индикатор загрузки, пока идет транзакция
+            tg.MainButton.showProgress();
+            
             const result = await apiFetch('upgrade_sector', 'POST', body);
+            
+            tg.MainButton.hideProgress();
             
             if (result) {
                 let message = isPurchase 
-                    ? `🎉 Сектор куплен! Ваш уровень: 1.`
+                    ? `🎉 Сектор куплен! Ваш уровень: 1. `
                     : `🚀 Улучшение завершено! Теперь уровень: ${result.new_level}.`;
                 
                 tg.showNotification({ message: message, type: 'success' });
@@ -539,9 +590,11 @@ async def serve_webapp():
         function updateLocalTimers() {
             const currentTimestamp = Date.now() / 1000;
             let totalIncome = 0;
+            let needToRefresh = false;
 
             Object.keys(gameState.industries).forEach(key => {
                 const sectorData = gameState.industries[key];
+                
                 if (sectorData.level > 0 && sectorData.last_collect > 0) {
                     const elapsed = currentTimestamp - sectorData.last_collect;
                     const cycleTime = sectorData.current_cycle_time;
@@ -555,21 +608,29 @@ async def serve_webapp():
                     totalIncome += incomeToCollect;
 
                     // Обновление UI для таймера
-                    const remaining = Math.ceil(cycleTime - (elapsed % cycleTime));
+                    let remaining = Math.max(0, cycleTime - (elapsed % cycleTime));
+                    sectorData.remaining_time = remaining;
+                    
                     const timerElement = document.getElementById(`timer-${key}`);
                     if (timerElement) {
-                        timerElement.textContent = formatTime(remaining);
+                        timerElement.textContent = `Осталось: ${formatTime(remaining)}`;
                     }
-                    
+
                     // Обновление состояния кнопки Собрать
                     const collectButton = document.querySelector(`#sector-${key} button:first-child`);
                     if (collectButton) {
+                        const cardElement = document.getElementById(`sector-${key}`);
+
                         if (incomeToCollect > 0) {
                             collectButton.disabled = false;
-                            document.getElementById(`sector-${key}`).classList.add('income-ready');
+                            cardElement.classList.add('income-ready');
+                            // Если только что стало готово, нужно обновить кнопку MainButton
+                            if (!tg.MainButton.isVisible) {
+                                needToRefresh = true; 
+                            }
                         } else {
                             collectButton.disabled = true;
-                            document.getElementById(`sector-${key}`).classList.remove('income-ready');
+                            cardElement.classList.remove('income-ready');
                         }
                     }
                 }
@@ -580,9 +641,13 @@ async def serve_webapp():
 
             if (totalIncome > 0) {
                 tg.MainButton.setText(`📥 Собрать ВЕСЬ доход (${totalIncome.toLocaleString()} BSS)`).show().enable();
-                tg.MainButton.onClick(collectAllIncome);
             } else {
                 tg.MainButton.hide();
+            }
+
+            // Принудительное обновление UI, если MainButton только что появилась (чтобы обновить текст на карте)
+            if (needToRefresh) {
+                 updateUI();
             }
         }
 
@@ -602,18 +667,35 @@ async def load_state_endpoint(user_id: str):
     current_time = time.time()
     state = load_player_state(user_id)
     
-    # Рассчитываем и обновляем состояние, чтобы фронтенд знал, сколько собирать
-    # и какое актуальное время цикла/стоимость
+    # 1. Рассчитываем и обновляем состояние, чтобы фронтенд знал, сколько собирать
+    # (Добавляет 'income_to_collect' и 'remaining_time' в state.industries)
     state = calculate_income_and_update_state(state, current_time)
     
-    # Добавляем актуальные параметры (доход, стоимость, цикл) в ответ для фронтенда
+    # 2. Добавляем актуальные параметры (доход, стоимость, цикл) в ответ для фронтенда
     for key, sector_data in state.industries.items():
-        level = sector_data["level"]
-        params = get_sector_params(key, max(1, level + 1)) # Для улучшения берем след. уровень
+        current_level = sector_data["level"]
         
-        sector_data["income"] = get_sector_params(key, level if level > 0 else 1)["income"] # Актуальный доход на текущем уровне
-        sector_data["cost"] = params["cost"]
-        sector_data["current_cycle_time"] = params["cycle_time"]
+        # Параметры для отображения ТЕКУЩЕГО уровня (доход, цикл)
+        # Если уровень 0, используем уровень 1 для отображения базовой информации
+        display_level = max(1, current_level) 
+        current_params = get_sector_params(key, display_level)
+        
+        # Параметры для улучшения (стоимость для перехода на следующий уровень)
+        next_level = max(1, current_level + 1)
+        next_params = get_sector_params(key, next_level)
+        
+        # Передаем фронтенду:
+        # - Доход текущего уровня
+        sector_data["income"] = current_params["income"] 
+        # - Стоимость улучшения до next_level
+        sector_data["cost"] = next_params["cost"]
+        # - Время цикла ТЕКУЩЕГО уровня (ВАЖНО для таймера фронтенда)
+        # Если уровень 0, используем базовое время
+        if current_level > 0:
+            sector_data["current_cycle_time"] = current_params["cycle_time"]
+        else:
+             sector_data["current_cycle_time"] = INDUSTRIES_CONFIG[key]['base_cycle_time']
+             
         sector_data["config"] = INDUSTRIES_CONFIG[key]
         
     return state
@@ -646,8 +728,11 @@ async def collect_income_endpoint(request: CollectRequest):
 
     collected_income = cycles_completed * income_per_cycle
     
-    # Обновляем состояние: добавляем доход и сбрасываем время сбора
+    # Обновляем состояние: добавляем доход и сбрасываем время сбора, 
+    # чтобы отсчет нового цикла начался с момента current_time
     state.balance += collected_income
+    
+    # Сброс last_collect на текущее время
     sector_data["last_collect"] = current_time 
     
     save_player_state(state)
@@ -704,11 +789,10 @@ async def upgrade_sector_endpoint(request: UpgradeRequest):
 
     current_level = sector_data["level"]
     
-    # Уровень, который мы пытаемся купить/улучшить
-    level_to_buy = current_level if current_level > 0 else 0
+    # Уровень, который будет достигнут
+    next_level = current_level + 1
     
-    # Стоимость определяется по следующему уровню (если не куплен, то уровень 1)
-    next_level = max(1, current_level + 1)
+    # Стоимость для перехода на next_level
     params = get_sector_params(sector_key, next_level)
     cost = params["cost"]
     
@@ -719,9 +803,9 @@ async def upgrade_sector_endpoint(request: UpgradeRequest):
     state.balance -= cost
     sector_data["level"] = next_level
 
-    # Если это была покупка (level 0 -> 1), нужно установить last_collect для старта цикла
-    if current_level == 0:
-        sector_data["last_collect"] = current_time
+    # ИСПРАВЛЕНИЕ: Обновляем last_collect: при любом улучшении (покупке или апгрейде) 
+    # цикл должен начаться заново, чтобы обеспечить геймплейный баланс.
+    sector_data["last_collect"] = current_time
     
     # Обновляем время цикла (оно зависит от нового уровня)
     sector_data["current_cycle_time"] = get_sector_params(sector_key, next_level)["cycle_time"]
