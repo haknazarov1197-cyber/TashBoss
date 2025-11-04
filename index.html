@@ -1,18 +1,491 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TashBoss</title>
-  <link rel="stylesheet" href="style.css" />
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TashBoss: Мини-приложение</title>
+    <!-- Подключение Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Подключение Telegram Web App SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        /* Настройка шрифта Inter и базовые стили */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--tg-theme-bg-color, #f4f4f5); /* Используем цвета темы Telegram */
+            color: var(--tg-theme-text-color, #1f2937);
+        }
+        /* Стили для кнопок, чтобы они соответствовали теме Telegram */
+        .tg-button {
+            background-color: var(--tg-theme-button-color, #007bff);
+            color: var(--tg-theme-button-text-color, #ffffff);
+            transition: background-color 0.15s;
+        }
+        .tg-button:hover:not(:disabled) {
+            background-color: var(--tg-theme-link-color, #0056b3);
+        }
+        .tg-secondary {
+             background-color: var(--tg-theme-secondary-bg-color, #e5e7eb);
+             color: var(--tg-theme-text-color, #1f2937);
+        }
+        .tg-card {
+            background-color: var(--tg-theme-secondary-bg-color, #ffffff);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+        .text-hint {
+            color: var(--tg-theme-hint-color, #9ca3af);
+        }
+        /* Анимация для накопления дохода */
+        @keyframes pulse {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.02); }
+        }
+        .collect-ready {
+            animation: pulse 1s infinite;
+            box-shadow: 0 0 10px rgba(0, 200, 0, 0.5);
+        }
+    </style>
 </head>
-<body>
-  <div id="app">
-    <h1>🏙️ <span style="color:#00ffcc;">Tash</span>Boss</h1>
-    <div id="balance">💰 0 BSS</div>
-    <div id="industries"></div>
-  </div>
-  <script src="app.js"></script>
+<body class="min-h-screen p-4 pb-20">
+    <div id="app-container" class="max-w-xl mx-auto">
+        <!-- Загрузочный экран -->
+        <div id="loading" class="text-center mt-20">
+            <svg class="animate-spin h-8 w-8 mx-auto text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-2 text-hint">Загрузка данных...</p>
+        </div>
+
+        <!-- Основной интерфейс игры -->
+        <div id="game-ui" class="hidden">
+            
+            <!-- Баланс -->
+            <div id="balance-card" class="tg-card p-4 rounded-xl mb-4 flex justify-between items-center sticky top-0 z-10">
+                <span class="text-lg font-semibold text-hint">Баланс:</span>
+                <span id="player-balance" class="text-2xl font-bold">0</span>
+            </div>
+
+            <!-- Общий доход к сбору -->
+             <div id="total-income-card" class="tg-card tg-button p-4 rounded-xl mb-6 cursor-pointer text-center" onclick="collectAllIncome()">
+                <div class="text-sm font-semibold">Общий доход к сбору:</div>
+                <div id="total-accumulated-income" class="text-2xl font-extrabold mt-1">0</div>
+                <div class="text-xs mt-1 opacity-80">(Нажмите, чтобы собрать все)</div>
+            </div>
+
+            <!-- Список секторов -->
+            <div id="sectors-list" class="space-y-3">
+                <!-- Сектора будут рендериться здесь -->
+            </div>
+
+             <!-- Место для сообщений об ошибках/успехе -->
+            <div id="message-box" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-green-500 text-white p-3 rounded-lg shadow-xl hidden transition-opacity duration-300 z-50">
+                Успешно!
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tg = Telegram.WebApp;
+        const API_BASE_URL = window.location.origin;
+
+        let USER_ID = 'DEBUG_USER_999'; // Заглушка
+        let gameState = null;
+        let config = null;
+        let lastUpdateTime = Date.now();
+        let currentInterval = null;
+
+        const elBalance = document.getElementById('player-balance');
+        const elTotalIncome = document.getElementById('total-accumulated-income');
+        const elSectorsList = document.getElementById('sectors-list');
+        const elLoading = document.getElementById('loading');
+        const elGameUI = document.getElementById('game-ui');
+        const elMessageBox = document.getElementById('message-box');
+
+        // --- УТИЛИТЫ ---
+
+        /**
+         * Выводит всплывающее сообщение.
+         * @param {string} message 
+         * @param {'success'|'error'|'info'} type 
+         */
+        function showMessage(message, type = 'info') {
+            elMessageBox.innerText = message;
+            elMessageBox.className = 'fixed bottom-4 left-1/2 transform -translate-x-1/2 p-3 rounded-lg shadow-xl z-50';
+            
+            if (type === 'success') {
+                elMessageBox.classList.add('bg-green-500', 'text-white');
+            } else if (type === 'error') {
+                elMessageBox.classList.add('bg-red-500', 'text-white');
+            } else {
+                elMessageBox.classList.add('bg-gray-700', 'text-white');
+            }
+
+            elMessageBox.classList.remove('hidden');
+            setTimeout(() => {
+                elMessageBox.classList.add('opacity-0');
+                setTimeout(() => {
+                    elMessageBox.classList.add('hidden');
+                    elMessageBox.classList.remove('opacity-0');
+                }, 300);
+            }, 3000);
+        }
+
+        /**
+         * Форматирует число как валюту.
+         * @param {number} num 
+         */
+        function formatNumber(num) {
+            return Math.round(num).toLocaleString('ru-RU');
+        }
+        
+        // --- ОСНОВНАЯ ЛОГИКА ---
+
+        /**
+         * Загружает состояние игрока с бэкенда.
+         */
+        async function loadGameState() {
+            if (!USER_ID || USER_ID === 'DEBUG_USER_999') {
+                 // Если WebApp не инициализирован, не пытаемся загрузить данные
+                 showMessage("Ошибка инициализации Telegram WebApp.", 'error');
+                 return;
+            }
+
+            elLoading.classList.remove('hidden');
+            elGameUI.classList.add('hidden');
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/load_state?user_id=${USER_ID}`);
+                if (!response.ok) throw new Error('Failed to load state');
+                
+                gameState = await response.json();
+                config = gameState.industries_config;
+
+                updateUI();
+                
+                if (!currentInterval) {
+                     // Запускаем локальный таймер для визуального обновления
+                    currentInterval = setInterval(localUpdateIncome, 1000);
+                }
+
+            } catch (error) {
+                console.error("Error loading game state:", error);
+                showMessage(`Ошибка загрузки: ${error.message}. Проверьте бэкенд (api.py).`, 'error');
+            } finally {
+                elLoading.classList.add('hidden');
+                elGameUI.classList.remove('hidden');
+            }
+        }
+        
+        /**
+         * Локально обновляет накопленный доход без обращения к серверу.
+         */
+        function localUpdateIncome() {
+            if (!gameState || !config) return;
+
+            const now = Date.now();
+            const elapsedSeconds = (now - lastUpdateTime) / 1000;
+            
+            let totalIncomeDelta = 0;
+            
+            for (const id in gameState.sectors) {
+                const sectorData = gameState.sectors[id];
+                const sectorConfig = config[id];
+
+                if (sectorData.level > 0 && sectorConfig) {
+                    const incomePerCycle = sectorConfig.base_income * sectorData.level;
+                    const cycleTime = sectorConfig.cycle_time;
+                    
+                    // Расчет, сколько циклов завершилось за прошедшую секунду
+                    // NOTE: Эта логика должна быть максимально приближена к бэкенду.
+                    // Для простоты, мы просто рассчитываем ежесекундный прирост, 
+                    // пока не пришло время сбора.
+
+                    // Ищем элемент, чтобы обновить таймер
+                    const elSector = document.getElementById(`sector-${id}`);
+                    if (!elSector) continue;
+                    
+                    const elTimer = elSector.querySelector('.sector-timer');
+                    const lastCollectTimeMs = sectorData.last_collect_time * 1000;
+                    const timeSinceCollect = (now - lastCollectTimeMs) / 1000;
+                    const cyclesPassed = Math.floor(timeSinceCollect / cycleTime);
+                    const incomeToCollect = cyclesPassed * incomePerCycle;
+                    
+                    if (incomeToCollect > sectorData.income_to_collect) {
+                        sectorData.income_to_collect = incomeToCollect;
+                        elSector.querySelector('.sector-income-to-collect').innerText = `+${formatNumber(incomeToCollect)}`;
+                        elSector.classList.add('collect-ready');
+                    } else if (incomeToCollect === 0) {
+                         elSector.classList.remove('collect-ready');
+                    }
+
+                    totalIncomeDelta += incomeToCollect;
+                    
+                    // Обновление таймера
+                    const timeUntilNextCycle = cycleTime - (timeSinceCollect % cycleTime);
+                    
+                    if (elTimer && timeUntilNextCycle > 0) {
+                         elTimer.innerText = `(${Math.ceil(timeUntilNextCycle)} с)`;
+                    } else if (elTimer) {
+                         elTimer.innerText = `(ГОТОВО)`;
+                    }
+                }
+            }
+
+            // Обновляем общий доход к сбору в шапке
+            elTotalIncome.innerText = formatNumber(totalIncomeDelta);
+            
+            lastUpdateTime = now; // Сбрасываем время для следующего интервала
+        }
+
+
+        /**
+         * Обновляет все элементы UI на основе gameState.
+         */
+        function updateUI() {
+            if (!gameState) return;
+
+            elBalance.innerText = formatNumber(gameState.balance);
+            elTotalIncome.innerText = formatNumber(gameState.total_accumulated_income);
+            
+            renderSectors();
+            
+            // Также обновляем MainButton Telegram для сбора всех доходов
+            updateMainButton(gameState.total_accumulated_income);
+        }
+
+        /**
+         * Отрисовывает список секторов.
+         */
+        function renderSectors() {
+            let html = '';
+            
+            // Преобразуем объект секторов в массив, чтобы можно было сортировать по ID (номеру)
+            const sortedSectors = Object.entries(gameState.sectors)
+                .map(([id, data]) => ({ id, data }))
+                .sort((a, b) => parseInt(a.id) - parseInt(b.id));
+
+            for (const { id, data } of sortedSectors) {
+                const cfg = config[id];
+                const isPurchased = data.level > 0;
+                const incomePerCycle = isPurchased ? cfg.base_income * data.level : cfg.base_income;
+                const isReadyToCollect = data.income_to_collect > 0;
+                
+                const cost = data.next_upgrade_cost;
+                const canAfford = gameState.balance >= cost;
+                
+                const sectorLevel = isPurchased ? `Ур. ${data.level}` : 'Не куплено';
+                const buttonText = isPurchased ? `Улучшить (${formatNumber(cost)})` : `Купить (${formatNumber(cost)})`;
+
+                html += `
+                <div id="sector-${id}" class="tg-card p-4 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center ${isReadyToCollect ? 'collect-ready border-2 border-green-500' : ''}">
+                    
+                    <!-- Описание сектора -->
+                    <div class="flex-grow mb-3 sm:mb-0">
+                        <div class="text-xl font-bold">${cfg.name}</div>
+                        <div class="text-sm text-hint">Доход/цикл: ${formatNumber(incomePerCycle)}</div>
+                        <div class="text-xs text-hint">Время цикла: ${cfg.cycle_time} с</div>
+                    </div>
+
+                    <!-- Информация об уровне и доходе -->
+                    <div class="flex flex-col items-start sm:items-end w-full sm:w-auto mb-3 sm:mb-0 sm:mr-4">
+                        <div class="font-semibold mb-1">${sectorLevel}</div>
+                        ${isPurchased ? 
+                            `<div class="text-sm font-bold text-green-600 flex items-center">
+                                Накоплено: <span class="sector-income-to-collect ml-1">+${formatNumber(data.income_to_collect)}</span>
+                                <span class="text-xs text-hint ml-1 sector-timer"></span>
+                            </div>` : ''
+                        }
+                    </div>
+
+                    <!-- Кнопки действий -->
+                    <div class="flex flex-col space-y-2 w-full sm:w-auto">
+                        ${isPurchased ? 
+                            `<button 
+                                onclick="collectIncome('${id}')" 
+                                class="tg-button px-4 py-2 rounded-lg text-sm font-semibold ${isReadyToCollect ? 'bg-green-600 hover:bg-green-700' : 'tg-secondary'}"
+                                ${isReadyToCollect ? '' : 'disabled'}
+                            >
+                                Собрать
+                            </button>` : ''
+                        }
+
+                        <button 
+                            onclick="upgradeSector('${id}')" 
+                            class="tg-button px-4 py-2 rounded-lg text-sm font-semibold"
+                            ${canAfford ? '' : 'disabled'}
+                        >
+                            ${buttonText}
+                        </button>
+                    </div>
+                </div>
+                `;
+            }
+            elSectorsList.innerHTML = html;
+        }
+        
+        // --- API ВЗАИМОДЕЙСТВИЕ ---
+
+        /**
+         * Собирает доход с одного сектора.
+         * @param {string} sectorId 
+         */
+        async function collectIncome(sectorId) {
+            const elButton = document.querySelector(`#sector-${sectorId} button:first-child`);
+            if (elButton) elButton.disabled = true;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/collect_income`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: USER_ID, sector_id: sectorId })
+                });
+
+                if (response.status === 200) {
+                    const data = await response.json();
+                    if (data.success) {
+                        showMessage(`Собрано ${formatNumber(data.collected)}!`, 'success');
+                    } else {
+                        // Сообщение, что собирать нечего
+                        showMessage("Доход еще не готов.", 'info');
+                    }
+                } else {
+                     throw new Error('Server error collecting income');
+                }
+            } catch (error) {
+                console.error("Error collecting income:", error);
+                showMessage("Ошибка при сборе дохода.", 'error');
+            } finally {
+                if (elButton) elButton.disabled = false;
+                // Всегда перезагружаем состояние, чтобы получить актуальные данные
+                loadGameState(); 
+            }
+        }
+        
+        /**
+         * Собирает весь накопленный доход со всех секторов.
+         */
+        async function collectAllIncome() {
+             if (gameState.total_accumulated_income === 0) {
+                 showMessage("Нет накопленного дохода для сбора.", 'info');
+                 return;
+             }
+             
+             // Отключаем MainButton и кнопку в шапке
+             tg.MainButton.showProgress();
+             document.getElementById('total-income-card').disabled = true;
+
+             let totalCollected = 0;
+             let collectedSuccessfully = false;
+             
+             // Собираем доход последовательно по каждому сектору
+             for (const id in gameState.sectors) {
+                 const sectorData = gameState.sectors[id];
+                 if (sectorData.income_to_collect > 0) {
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/api/collect_income`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_id: USER_ID, sector_id: id })
+                        });
+                        if (response.ok) {
+                             const data = await response.json();
+                             if (data.success) {
+                                totalCollected += data.collected;
+                                collectedSuccessfully = true;
+                             }
+                        }
+                    } catch (error) {
+                        console.error(`Error collecting income for sector ${id}:`, error);
+                    }
+                 }
+             }
+
+             tg.MainButton.hideProgress();
+             document.getElementById('total-income-card').disabled = false;
+             
+             if (collectedSuccessfully) {
+                showMessage(`Собрано ${formatNumber(totalCollected)} со всех секторов!`, 'success');
+             } else {
+                showMessage("Сбор не дал результатов.", 'info');
+             }
+
+             loadGameState(); // Обязательно перезагружаем состояние
+
+        }
+
+        /**
+         * Улучшает (или покупает) сектор.
+         * @param {string} sectorId 
+         */
+        async function upgradeSector(sectorId) {
+            const elButton = document.querySelector(`#sector-${sectorId} button:last-child`);
+            if (elButton) elButton.disabled = true;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/upgrade_sector`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: USER_ID, sector_id: sectorId })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        const action = gameState.sectors[sectorId].level === 0 ? 'Куплено' : 'Улучшено';
+                        showMessage(`${action} до Ур. ${data.new_level}! Стоимость: ${formatNumber(data.cost)}.`, 'success');
+                    }
+                } else {
+                    const errorData = await response.json();
+                    if (errorData.message === "Insufficient balance") {
+                        showMessage("Недостаточно средств!", 'error');
+                    } else {
+                         throw new Error(errorData.error || 'Unknown server error during upgrade');
+                    }
+                }
+            } catch (error) {
+                console.error("Error upgrading sector:", error);
+                showMessage("Ошибка при улучшении сектора.", 'error');
+            } finally {
+                if (elButton) elButton.disabled = false;
+                loadGameState(); // Всегда перезагружаем состояние
+            }
+        }
+        
+        /**
+         * Настройка MainButton Telegram.
+         * @param {number} totalIncome 
+         */
+        function updateMainButton(totalIncome) {
+            if (totalIncome > 0) {
+                tg.MainButton.setText(`Собрать весь доход (${formatNumber(totalIncome)})`);
+                tg.MainButton.onClick(collectAllIncome);
+                tg.MainButton.show();
+            } else {
+                tg.MainButton.hide();
+            }
+        }
+
+
+        // --- ИНИЦИАЛИЗАЦИЯ ---
+        
+        tg.ready();
+        tg.expand();
+        
+        // Получаем ID пользователя из Telegram initData
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            USER_ID = tg.initDataUnsafe.user.id;
+        } else {
+            console.warn("Could not get Telegram User ID. Using debug ID.");
+            // Для локального тестирования можно использовать DEBUG_USER_999
+        }
+        
+        loadGameState();
+
+        // Обработчик закрытия Mini App
+        tg.onEvent('mainButtonClicked', collectAllIncome);
+
+    </script>
 </body>
 </html>
