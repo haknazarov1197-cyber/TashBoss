@@ -39,7 +39,6 @@ def get_player(data, user_id):
         }
     return data[str(user_id)]
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     data = load_data()
@@ -71,15 +70,23 @@ async def handle_industry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     industry = player["industries"][key]
     config = INDUSTRIES[key]
 
-    # Расчёт дохода
+    cooldown = 30  # время накопления (в секундах)
     elapsed = time.time() - industry["last_collect"]
-    income = config["base_income"] * industry["level"] * int(elapsed // 10)  # каждые 10 сек
+    ready = elapsed >= cooldown
+
+    remaining = int(cooldown - elapsed) if not ready else 0
+    income = config["base_income"] * industry["level"]
+
+    if ready:
+        status = f"✅ Доход готов к сбору!\n💰 Прибыль: {income} BSS"
+    else:
+        status = f"⏳ Доход ещё не готов. Осталось {remaining} сек."
 
     text = (
         f"{config['name']}\n\n"
         f"🏗 Уровень: {industry['level']}\n"
-        f"💵 Потенциальный доход: {income} BSS\n"
-        f"💰 Ваш баланс: {player['balance']} BSS\n"
+        f"{status}\n\n"
+        f"💰 Баланс: {player['balance']} BSS"
     )
 
     keyboard = [
@@ -101,15 +108,18 @@ async def collect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     industry = player["industries"][key]
     config = INDUSTRIES[key]
 
+    cooldown = 30  # 30 секунд
     elapsed = time.time() - industry["last_collect"]
-    income = config["base_income"] * industry["level"] * int(elapsed // 10)
-    if income > 0:
+
+    if elapsed >= cooldown:
+        income = config["base_income"] * industry["level"]
         player["balance"] += income
         industry["last_collect"] = time.time()
         save_data(data)
-        await query.answer(f"Вы собрали {income} BSS 💰")
+        await query.answer(f"✅ Вы собрали {income} BSS 💰")
     else:
-        await query.answer("Пока нечего собирать 😅", show_alert=True)
+        remaining = int(cooldown - elapsed)
+        await query.answer(f"⏳ Ещё не готово! Осталось {remaining} сек.", show_alert=True)
 
     await handle_industry(update, context)
 
@@ -171,3 +181,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
