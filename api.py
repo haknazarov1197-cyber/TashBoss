@@ -3,9 +3,11 @@ import sys
 import json
 import logging
 from datetime import datetime, timedelta
+import asyncio # Добавлено для задержки
+import random # Добавлено для случайной задержки
 
 from fastapi import FastAPI, HTTPException, status, Request
-from fastapi.middleware.cors import CORSMiddleware # ИСПРАВЛЕНО: 'WARE' на 'ware'
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
@@ -13,7 +15,8 @@ from pydantic import BaseModel, Field
 # Импорты для Firebase/Firestore
 import firebase_admin
 from firebase_admin import credentials, firestore
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+# Добавлен импорт error для обработки RetryAfter
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, error as telegram_error 
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Настройка логирования
@@ -29,7 +32,7 @@ app = FastAPI(title="TashBoss Clicker API", description="Backend for Telegram Mi
 # Настройка CORS
 origins = ["*"]
 app.add_middleware(
-    CORSMiddleware, # ИСПРАВЛЕНО: 'WARE' на 'ware'
+    CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
@@ -204,8 +207,23 @@ if tg_app:
         base_url = os.getenv("BASE_URL")
         if base_url:
             webhook_url = f"{base_url}/bot_webhook"
-            await tg_app.bot.set_webhook(url=webhook_url)
-            logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
+            
+            # ИСПРАВЛЕНИЕ КРАША ИЗ-ЗА GUNICORN/TELEGRAM RATE LIMIT:
+            # Gunicorn запускает несколько воркеров, каждый из которых пытается установить вебхук
+            # одновременно, что вызывает ошибку 'RetryAfter'. Оборачиваем в try/except.
+            
+            # Добавим небольшую случайную задержку, чтобы избежать одновременного удара по API
+            await asyncio.sleep(random.uniform(0.1, 1.0))
+
+            try:
+                await tg_app.bot.set_webhook(url=webhook_url)
+                logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
+            except telegram_error.RetryAfter as e:
+                # Если воркер попал под ограничение (429), это, вероятно, означает, 
+                # что другой воркер уже установил его.
+                logger.warning(f"Ошибка Rate Limit при установке вебхука: {e}. Продолжаем работу.")
+            except Exception as e:
+                 logger.error(f"Непредвиденная ошибка при установке вебхука: {e}")
         else:
             logger.warning("BASE_URL не установлен. Webhook не установлен.")
 
@@ -315,4 +333,3 @@ def read_root():
 # Это КРИТИЧЕСКИ ВАЖНО для устранения ошибки 404!
 # Мы монтируем статические файлы в корень, но используем health_check для Render.
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
-
