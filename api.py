@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, status, Request
-from fastapi.middleware.cors import CORSMiddleWARE
+from fastapi.middleware.cors import CORSMiddleware # ИСПРАВЛЕНО: 'WARE' на 'ware'
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
@@ -29,7 +29,7 @@ app = FastAPI(title="TashBoss Clicker API", description="Backend for Telegram Mi
 # Настройка CORS
 origins = ["*"]
 app.add_middleware(
-    CORSMiddleware,
+    CORSMiddleware, # ИСПРАВЛЕНО: 'WARE' на 'ware'
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
@@ -153,9 +153,6 @@ async def get_auth_data(request: Request) -> dict:
     user_id = hashlib.sha256(init_data.encode('utf-8')).hexdigest()
     
     return {"uid": user_id}
-
-# ... (Остальные функции load_or_create_state, save_state, calculate_income остаются без изменений)
-# Я не могу их повторно вставить, но они должны быть в вашем api.py
 
 def calculate_income(state: UserState) -> tuple[float, datetime]:
     """Рассчитывает доход с момента последнего сбора."""
@@ -318,3 +315,4 @@ def read_root():
 # Это КРИТИЧЕСКИ ВАЖНО для устранения ошибки 404!
 # Мы монтируем статические файлы в корень, но используем health_check для Render.
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
+
