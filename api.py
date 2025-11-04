@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import asyncio
-import time # Добавляем для работы со временем/временными метками
+import time
 
 # --- Firebase Imports ---
 try:
@@ -16,11 +16,15 @@ except ImportError:
 
 # --- FastAPI/Uvicorn Imports ---
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel # Добавляем для работы с POST-запросами
+from pydantic import BaseModel 
 
 # Настраиваем логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 1. Основное приложение FastAPI (Веб-хук)
+# !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: ПЕРЕНОС ИНИЦИАЛИЗАЦИИ В НАЧАЛО !!!
+app = FastAPI()
 
 # Глобальные переменные для Firebase
 db = None
@@ -31,7 +35,7 @@ class CollectIncomeRequest(BaseModel):
     user_id: int # Telegram ID пользователя
     sector_id: str
 
-# 1. Инициализация Firebase/Firestore
+# 2. Инициализация Firebase/Firestore
 def initialize_firebase():
     """Инициализирует Firebase и создает клиент Firestore."""
     global db
@@ -66,9 +70,11 @@ initialize_firebase()
 def get_player_ref(user_id: int):
     """Возвращает ссылку на документ игрока в публичной коллекции."""
     if not db:
-        raise Exception("Database not initialized")
+        # Если база данных не инициализирована, поднимаем ошибку
+        raise Exception("Database not initialized. Check FIREBASE_CREDENTIALS_JSON.")
     
     # Путь: /artifacts/{APP_ID}/public/data/players/{user_id}
+    # Используем асинхронный доступ (collection.document(str(user_id)))
     return db.collection(f"artifacts/{APP_ID}/public/data/players").document(str(user_id))
 
 def get_initial_player_data(user_id: int) -> dict:
@@ -93,7 +99,7 @@ def get_initial_player_data(user_id: int) -> dict:
 
 @app.head("/")
 async def head_root():
-    """Обрабатывает HEAD-запросы для проверки активности сервиса."""
+    """Обрабатывает HEAD-запросы для проверки активности сервиса (используется Render)."""
     return {"status": "ok"}
 
 @app.get("/")
@@ -109,12 +115,13 @@ async def load_state(user_id: int):
     """
     try:
         player_ref = get_player_ref(user_id)
-        player_doc = await player_ref.get()
+        # Обратите внимание: метод .get() в firebase-admin асинхронный
+        player_doc = player_ref.get()
 
         if not player_doc.exists:
             # Создаем нового игрока
             initial_data = get_initial_player_data(user_id)
-            await player_ref.set(initial_data)
+            player_ref.set(initial_data) # set() не асинхронный
             data = initial_data
             logger.info(f"Создан новый игрок: {user_id}")
         else:
@@ -124,7 +131,6 @@ async def load_state(user_id: int):
         total_accumulated_income = 0
         current_time = int(time.time())
         
-        # NOTE: Эту логику лучше перенести в отдельный service/utility, но пока оставим здесь
         for sector_id, sector in data.get("sectors", {}).items():
             last_collect = sector.get("last_collect_time", current_time)
             income_per_second = sector.get("income_per_second", 0)
@@ -143,6 +149,7 @@ async def load_state(user_id: int):
     except Exception as e:
         logger.error(f"Ошибка при загрузке состояния игрока {user_id}: {e}")
         # Возвращаем ошибку, которую обработает app.js
+        # Нельзя использовать HTTPException, если хотим вернуть JSON с ошибкой
         return {"error": str(e)}
 
 @app.post("/api/collect_income")
@@ -154,15 +161,18 @@ async def collect_income(request: CollectIncomeRequest):
     sector_id = request.sector_id
     
     if not db:
+        # Используем HTTPException для API-ошибок
         raise HTTPException(status_code=500, detail="Database not initialized")
 
     player_ref = get_player_ref(user_id)
     current_time = int(time.time())
     
     # 1. Транзакция для безопасного обновления
+    # NOTE: В python-admin SDK транзакции синхронные, поэтому async/await здесь не используется
+    # в самой функции, но конечная точка FastAPI остается асинхронной.
     @firestore.transactional
-    async def transaction_update(transaction, player_ref):
-        snapshot = await player_ref.get(transaction=transaction)
+    def transaction_update(transaction, player_ref):
+        snapshot = player_ref.get(transaction=transaction)
         if not snapshot.exists:
             raise HTTPException(status_code=404, detail="Игрок не найден.")
         
@@ -200,25 +210,16 @@ async def collect_income(request: CollectIncomeRequest):
 
     # Выполняем транзакцию
     try:
-        result = await transaction_update(db.transaction(), player_ref)
+        # Вызов синхронной функции внутри асинхронной конечной точки
+        # В uvicorn это обычно безопасно, но для чистой асинхронности можно использовать asyncio.to_thread(transaction_update, ...)
+        result = transaction_update(db.transaction(), player_ref)
         if result.get("success") is False:
+             # Если транзакция вернула ошибку, бросаем HTTP-ответ
              raise HTTPException(status_code=400, detail=result.get("message"))
         return result
     except HTTPException as e:
+        # Пробрасываем HTTP-ошибки
         raise e
     except Exception as e:
         logger.error(f"Ошибка транзакции сбора дохода для {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка сервера при сборе дохода.")
-
-# 3. Основное приложение FastAPI (Веб-хук)
-app = FastAPI()
-
-# Внимание: Логика Telegram-бота (PTB) пока не интегрирована с FastAPI
-# Если вы хотите, чтобы это был полноценный Webhook-бот на PTB, потребуется дополнительная настройка.
-# Если это просто WebApp API, то текущая структура подходит.
-
-# @app.post("/webhook")
-# async def handle_telegram_updates(request: Request):
-#     """Здесь будет обрабатываться входящие обновления от Telegram для вашего бота."""
-#     # ... логика PTB Webhook ...
-#     return {"status": "ok"}
