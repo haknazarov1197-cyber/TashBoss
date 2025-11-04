@@ -13,7 +13,9 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
 
-# Импорты для Firebase/Firestore - УДАЛЕНЫ ДЛЯ ТЕСТА
+# Импорты для Firebase/Firestore
+import firebase_admin
+from firebase_admin import credentials, firestore
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, error as telegram_error 
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -23,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------
 # КРИТИЧЕСКИ ВАЖНО: Инициализация 'app' на верхнем уровне для Gunicorn
-app = FastAPI(title="TashBoss Clicker API (MOCK)", description="Backend for Telegram Mini App (MOCK DB)")
+app = FastAPI(title="TashBoss Clicker API", description="Backend for Telegram Mini App")
 # -------------------------------------------------------------
 
 
@@ -35,13 +37,43 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Добавим заголовки, необходимые для авторизации (Authorization)
     expose_headers=["Authorization"],
 )
 
 # --- КОНФИГУРАЦИЯ ---
+FIREBASE_KEY_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
 TOKEN = os.getenv("BOT_TOKEN") 
 BASE_URL = os.getenv("BASE_URL") or "https://tashboss.onrender.com"
 WEB_APP_URL = f"{BASE_URL}" 
+
+# --------------------
+
+# Инициализация Firebase Admin SDK
+db = None
+def initialize_firebase():
+    """Инициализация Firebase Admin SDK с использованием ключа из переменной окружения."""
+    global db
+    if FIREBASE_KEY_JSON and not firebase_admin._apps:
+        try:
+            # Парсим JSON-строку из переменной окружения
+            cred_dict = json.loads(FIREBASE_KEY_JSON)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            logger.info("Firebase Admin SDK успешно инициализирован.")
+        except json.JSONDecodeError:
+            logger.error("Ошибка: FIREBASE_SERVICE_ACCOUNT_KEY содержит невалидный JSON.")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации Firebase Admin SDK: {e}")
+            db = None
+    elif firebase_admin._apps:
+        db = firestore.client()
+        logger.info("Firebase Admin SDK уже инициализирован.")
+    else:
+        logger.warning("FIREBASE_SERVICE_ACCOUNT_KEY не установлен. Firestore будет недоступен.")
+
+initialize_firebase()
 
 # --- СХЕМЫ ДАННЫХ ---
 class UserState(BaseModel):
@@ -64,32 +96,6 @@ SECTOR_COSTS = {
     "sector3": 2500.0
 }
 MAX_IDLE_TIME = 10 * 24 * 3600 # 10 дней в секундах
-
-# -------------------------------------------------------------
-# --- MOCK DATABASE (Заглушка) ---
-# Словарь для хранения состояний в памяти (не сохраняется при перезапуске)
-MOCK_DB: Dict[str, UserState] = {}
-
-async def load_or_create_state_mock(user_id: str) -> UserState:
-    """Загружает состояние пользователя из MOCK_DB или создает новое."""
-    if user_id in MOCK_DB:
-        state = MOCK_DB[user_id]
-        logger.info(f"Загружено MOCK-состояние для UID: {user_id}")
-    else:
-        # Стартовый капитал для теста
-        state = UserState(balance=5000.0) 
-        MOCK_DB[user_id] = state
-        logger.info(f"Создано новое MOCK-состояние со стартовым капиталом для UID: {user_id}")
-        
-    return state
-
-async def save_state_mock(user_id: str, state: UserState):
-    """Сохраняет состояние пользователя в MOCK_DB."""
-    MOCK_DB[user_id] = state
-    logger.info(f"Сохранено MOCK-состояние для UID: {user_id}")
-
-# -------------------------------------------------------------
-
 
 # --- ЛОГИКА ТЕЛЕГРАМ БОТА ---
 
@@ -127,7 +133,15 @@ def get_telegram_application() -> Application | None:
 # Инициализация Telegram Bot Application
 tg_app = get_telegram_application()
 
-# --- ФУНКЦИИ АУТЕНТИФИКАЦИИ ---
+# --- ФУНКЦИИ АУТЕНТИФИКАЦИИ И FIREBASE ---
+
+def get_db_ref(user_id: str):
+    """Получает ссылку на документ пользователя в Firestore."""
+    if not db:
+        # Если Firebase не инициализирован (нет ключа), все API-запросы провалятся
+        raise HTTPException(status_code=500, detail="Firestore не инициализирован. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY.")
+    # Использование пути 'users' как корневой коллекции
+    return db.collection("users").document(user_id) 
 
 async def get_auth_data(request: Request) -> dict:
     """Верифицирует токен Telegram Mini App из заголовка Authorization."""
@@ -140,9 +154,8 @@ async def get_auth_data(request: Request) -> dict:
 
     init_data = auth_header.split(" ")[1]
     
-    # Заглушка UID на основе init_data
+    # Заглушка UID на основе init_data (в реальном приложении нужна полная верификация)
     import hashlib
-    # Используем заглушку, чтобы не зависеть от полной валидации токена Telegram
     user_id = hashlib.sha256(init_data.encode('utf-8')).hexdigest()
     
     return {"uid": user_id}
@@ -166,6 +179,29 @@ def calculate_income(state: UserState) -> tuple[float, datetime]:
             income += rate * count * effective_seconds
             
     return income, now
+
+async def load_or_create_state(user_id: str) -> UserState:
+    """Загружает состояние пользователя из Firestore или создает новое с 5000 BSS."""
+    user_ref = get_db_ref(user_id)
+    doc = user_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        state = UserState(**data)
+        logger.info(f"Загружено состояние для UID: {user_id}")
+    else:
+        # Добавление стартового капитала (5000 BSS)
+        state = UserState(balance=5000.0) 
+        await save_state(user_id, state)
+        logger.info(f"Создано новое состояние со стартовым капиталом для UID: {user_id}")
+        
+    return state
+
+async def save_state(user_id: str, state: UserState):
+    """Сохраняет состояние пользователя в Firestore."""
+    user_ref = get_db_ref(user_id)
+    user_ref.set(state.model_dump())
+    logger.info(f"Сохранено состояние для UID: {user_id}")
 
 # --- ФУНКЦИЯ ДЛЯ УСТАНОВКИ WEBHOOK ---
 async def set_telegram_webhook():
@@ -221,55 +257,52 @@ if tg_app:
 # --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ ---
 @app.post("/api/load_state")
 async def load_state(request: Request):
-    """Загружает состояние игры и применяет пассивный доход, используя MOCK DB."""
+    """Загружает состояние игры и применяет пассивный доход, используя Firestore."""
     try:
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
 
-        state = await load_or_create_state_mock(user_id)
+        state = await load_or_create_state(user_id)
         collected_income, current_time = calculate_income(state)
         
-        # Обновляем состояние в памяти
         state.balance += collected_income
         state.last_collection_time = current_time.isoformat()
         
-        await save_state_mock(user_id, state) # Сохраняем в MOCK_DB
+        await save_state(user_id, state)
 
         return {"status": "ok", "state": state.model_dump(), "collected_income": collected_income}
     except HTTPException as e:
         raise e
     except Exception as e:
         logger.error(f"Ошибка в load_state: {e}")
-        # Возвращаем 500, но теперь она должна быть вызвана чем-то другим, а не Firebase
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при загрузке состояния (MOCK DB).")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при загрузке состояния.")
 
 
 @app.post("/api/collect_income")
 async def collect_income(request: Request):
-    """Собирает пассивный доход, используя MOCK DB."""
+    """Собирает пассивный доход, используя Firestore."""
     try:
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
 
-        state = await load_or_create_state_mock(user_id)
+        state = await load_or_create_state(user_id)
         collected_income, current_time = calculate_income(state)
         
-        # Обновляем состояние в памяти
         state.balance += collected_income
         state.last_collection_time = current_time.isoformat()
 
-        await save_state_mock(user_id, state) # Сохраняем в MOCK_DB
+        await save_state(user_id, state)
         
         return {"status": "ok", "state": state.model_dump(), "collected_income": collected_income}
     except HTTPException as e:
         raise e
     except Exception as e:
         logger.error(f"Ошибка в collect_income: {e}")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при сборе дохода (MOCK DB).")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при сборе дохода.")
 
 @app.post("/api/buy_sector")
 async def buy_sector(req: BuySectorRequest, request: Request):
-    """Покупает один сектор, используя MOCK DB."""
+    """Покупает один сектор, используя Firestore."""
     try:
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
@@ -278,7 +311,8 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         if sector_name not in SECTOR_COSTS:
             raise HTTPException(status_code=400, detail="Неверное название сектора.")
 
-        state = await load_or_create_state_mock(user_id)
+        # ПЕРЕРАСЧЕТ СТОИМОСТИ: стоимость должна расти с каждой покупкой
+        state = await load_or_create_state(user_id)
         current_count = state.sectors.get(sector_name, 0)
         
         # Стоимость = Базовая стоимость * (Количество + 1)
@@ -296,21 +330,21 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         state.balance -= cost
         state.sectors[sector_name] = state.sectors.get(sector_name, 0) + 1
 
-        await save_state_mock(user_id, state) # Сохраняем в MOCK_DB
+        await save_state(user_id, state)
 
         return {"status": "ok", "state": state.model_dump()}
     except HTTPException as e:
         raise e
     except Exception as e:
         logger.error(f"Ошибка в buy_sector: {e}")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при покупке сектора (MOCK DB).")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при покупке сектора.")
 
 # --- ОБСЛУЖИВАНИЕ СТАТИЧЕСКИХ ФАЙЛОВ И WEBAPP ---
 
 @app.get("/health_check")
 def read_root():
     """Простой ответ для проверки работоспособности (health check)."""
-    return {"status": "ok", "message": "TashBoss Clicker API is running (MOCK DB)."}
+    return {"status": "ok", "message": "TashBoss Clicker API is running."}
 
 # Обслуживание статических файлов (index.html, app.js, style.css)
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
