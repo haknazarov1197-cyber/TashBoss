@@ -1,6 +1,6 @@
-python-telegram-bot==20.8
-fastapi==0.111.0
-uvicorn==0.29.0
-pydantic==1.10.16
-firebase-admin==6.5.0
+fastapi
+uvicorn[standard]
+pydantic
+firebase-admin
 google-cloud-firestore
+gunicorn
