@@ -56,7 +56,7 @@ def initialize_firebase():
     
     if FIREBASE_KEY_JSON and not firebase_admin._apps:
         try:
-            # ---> КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Очистка JSON-строки <---
+            # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Очистка JSON-строки
             cleaned_json_string = FIREBASE_KEY_JSON.strip() 
             
             # Парсим JSON-строку
@@ -79,7 +79,7 @@ def initialize_firebase():
 
 initialize_firebase()
 
-# --- СХЕМЫ ДАННЫХ (Остаются без изменений) ---
+# --- СХЕМЫ ДАННЫХ ---
 class UserState(BaseModel):
     balance: float = Field(default=0.0)
     sectors: Dict[str, int] = Field(default_factory=lambda: {"sector1": 0, "sector2": 0, "sector3": 0})
@@ -88,7 +88,7 @@ class UserState(BaseModel):
 class BuySectorRequest(BaseModel):
     sector: str
 
-# --- СТАВКИ И ЗАТРАТЫ (Остаются без изменений) ---
+# --- СТАВКИ И ЗАТРАТЫ ---
 INCOME_RATES = {
     "sector1": 0.5, 
     "sector2": 2.0, 
@@ -101,14 +101,48 @@ SECTOR_COSTS = {
 }
 MAX_IDLE_TIME = 10 * 24 * 3600 # 10 дней в секундах
 
-# --- ФУНКЦИИ АУТЕНТИФИКАЦИИ И FIREBASE (Исправлен только вызов get_db_ref) ---
+# --- ЛОГИКА ТЕЛЕГРАМ БОТА ---
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Отправляет сообщение с кнопкой для открытия Telegram Mini App.
+    """
+    user = update.effective_user
+    keyboard = [
+        [InlineKeyboardButton("🏙 Открыть TashBoss", web_app=WebAppInfo(url=WEB_APP_URL))]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"👋 Добро пожаловать, *{user.first_name}*!\n\n"
+        f"Управляйте городом и зарабатывайте BossCoin (BSS) в нашем Mini App 👇",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+def get_telegram_application() -> Application | None:
+    """
+    Создает и настраивает экземпляр Telegram Application.
+    """
+    if not TOKEN:
+        logger.error("ОШИБКА: Токен бота (BOT_TOKEN) не установлен.")
+        return None
+
+    logger.info("Инициализация Telegram Application (Webhook Mode)...")
+    app_tg = Application.builder().token(TOKEN).build()
+    app_tg.add_handler(CommandHandler("start", start_command))
+
+    return app_tg
+
+# Инициализация Telegram Bot Application -- ПЕРЕНЕСЕНО СЮДА
+tg_app = get_telegram_application() 
+
+# --- ФУНКЦИИ АУТЕНТИФИКАЦИИ И FIREBASE ---
 
 def get_db_ref(user_id: str):
     """Получает ссылку на документ пользователя в Firestore."""
     if not db:
-        # Если Firebase не инициализирован, выбрасываем 500 ошибку
         raise HTTPException(status_code=500, detail="Firestore не инициализирован. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY.")
-    # Использование пути 'users' как корневой коллекции
     return db.collection("users").document(user_id) 
 
 async def get_auth_data(request: Request) -> dict:
@@ -171,47 +205,61 @@ async def save_state(user_id: str, state: UserState):
     user_ref.set(state.model_dump())
     logger.info(f"Сохранено состояние для UID: {user_id}")
 
-# --- WEBHOOK и API ЭНДПОИНТЫ (Без изменений) ---
-
+# --- ФУНКЦИЯ ДЛЯ УСТАНОВКИ WEBHOOK ---
 async def set_telegram_webhook():
+    """
+    Выполняет установку вебхука асинхронно, не блокируя запуск Gunicorn.
+    """
     if tg_app:
         base_url = os.getenv("BASE_URL")
         if base_url:
             webhook_url = f"{base_url}/bot_webhook"
+            
             await asyncio.sleep(random.uniform(0.1, 1.0))
+
             try:
                 await tg_app.bot.set_webhook(url=webhook_url)
                 logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
             except telegram_error.RetryAfter as e:
-                logger.warning(f"Ошибка Rate Limit: {e}. Продолжаем работу.")
+                logger.warning(f"Ошибка Rate Limit при установке вебхука: {e}. Продолжаем работу.")
             except Exception as e:
                  logger.error(f"Непредвиденная ошибка при установке вебхука: {e}")
         else:
             logger.warning("BASE_URL не установлен. Webhook не установлен.")
 
+# --- НАСТРОЙКА WEBHOOK ---
 if tg_app:
     @app.on_event("startup")
     async def startup_event():
         try:
             await tg_app.initialize()
-            logger.info("Telegram Application инициализирован.")
+            logger.info("Telegram Application инициализирован для асинхронной работы.")
         except Exception as e:
             logger.error(f"Ошибка при инициализации Telegram Application: {e}")
+        
         asyncio.create_task(set_telegram_webhook())
+        logger.info("Задача установки Webhook запущена в фоне.")
+
 
     @app.post("/bot_webhook")
     async def telegram_webhook(request: Request):
         try:
             body = await request.json()
+            logger.info(f"Получен входящий JSON от Telegram: {json.dumps(body)}")
+            
             update_obj = Update.de_json(data=body, bot=tg_app.bot) 
+            
             await tg_app.process_update(update_obj) 
+            
             return {"status": "ok"}
         except Exception as e:
             logger.error(f"Ошибка обработки вебхука Telegram: {e}")
-            return {"status": "error", "message": str(e)}, 200
+            return {"status": "error", "message": str(e)}, 200 # Возвращаем 200 для Telegram
 
+# --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ (Без изменений) ---
 @app.post("/api/load_state")
 async def load_state(request: Request):
+    """Загружает состояние игры и применяет пассивный доход, используя Firestore."""
     try:
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
@@ -234,6 +282,7 @@ async def load_state(request: Request):
 
 @app.post("/api/collect_income")
 async def collect_income(request: Request):
+    """Собирает пассивный доход, используя Firestore."""
     try:
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
@@ -255,6 +304,7 @@ async def collect_income(request: Request):
 
 @app.post("/api/buy_sector")
 async def buy_sector(req: BuySectorRequest, request: Request):
+    """Покупает один сектор, используя Firestore."""
     try:
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
@@ -263,18 +313,22 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         if sector_name not in SECTOR_COSTS:
             raise HTTPException(status_code=400, detail="Неверное название сектора.")
 
+        # ПЕРЕРАСЧЕТ СТОИМОСТИ: стоимость должна расти с каждой покупкой
         state = await load_or_create_state(user_id)
         current_count = state.sectors.get(sector_name, 0)
         
+        # Стоимость = Базовая стоимость * (Количество + 1)
         cost = SECTOR_COSTS[sector_name] * (current_count + 1)
         
         if state.balance < cost:
             raise HTTPException(status_code=400, detail="Недостаточно средств для покупки.")
         
+        # Расчет и сбор дохода перед покупкой
         collected_income, current_time = calculate_income(state)
         state.balance += collected_income
         state.last_collection_time = current_time.isoformat()
 
+        # Выполнение покупки
         state.balance -= cost
         state.sectors[sector_name] = state.sectors.get(sector_name, 0) + 1
 
@@ -287,10 +341,12 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         logger.error(f"Ошибка в buy_sector: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при покупке сектора.")
 
-# --- ОБСЛУЖИВАНИЕ СТАТИЧЕСКИХ ФАЙЛОВ И WEBAPP (Без изменений) ---
+# --- ОБСЛУЖИВАНИЕ СТАТИЧЕСКИХ ФАЙЛОВ И WEBAPP ---
 
 @app.get("/health_check")
 def read_root():
-    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Firebase Init)."}
+    """Простой ответ для проверки работоспособности (health check)."""
+    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Init Order)."}
 
+# Обслуживание статических файлов (index.html, app.js, style.css)
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
