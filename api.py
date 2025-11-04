@@ -3,8 +3,8 @@ import sys
 import json
 import logging
 from datetime import datetime, timedelta
-import asyncio # Добавлено для задержки
-import random # Добавлено для случайной задержки
+import asyncio 
+import random 
 
 from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -199,40 +199,51 @@ async def save_state(user_id: str, state: UserState):
     user_ref.set(state.model_dump())
     logger.info(f"Сохранено состояние для UID: {user_id}")
 
-# --- НАСТРОЙКА WEBHOOK ---
-if tg_app:
-    # Установка Telegram Webhook (это нужно для корректной работы)
-    @app.on_event("startup")
-    async def startup_event():
-        # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Инициализация Application перед использованием post_update
-        try:
-            await tg_app.initialize()
-            logger.info("Telegram Application инициализирован для асинхронной работы.")
-        except Exception as e:
-            logger.error(f"Ошибка при инициализации Telegram Application: {e}")
-
+# --- ФУНКЦИЯ ДЛЯ УСТАНОВКИ WEBHOOK (Вынесена из startup_event) ---
+async def set_telegram_webhook():
+    """
+    Выполняет установку вебхука асинхронно, не блокируя запуск Gunicorn.
+    Это помогает избежать тайм-аута Render.
+    """
+    if tg_app:
         base_url = os.getenv("BASE_URL")
         if base_url:
             webhook_url = f"{base_url}/bot_webhook"
-            
-            # ИСПРАВЛЕНИЕ КРАША ИЗ-ЗА GUNICORN/TELEGRAM RATE LIMIT:
-            # Gunicorn запускает несколько воркеров, каждый из которых пытается установить вебхук
-            # одновременно, что вызывает ошибку 'RetryAfter'. Оборачиваем в try/except.
             
             # Добавим небольшую случайную задержку, чтобы избежать одновременного удара по API
             await asyncio.sleep(random.uniform(0.1, 1.0))
 
             try:
-                await tg_app.bot.set_webhook(url=webhook_url)
-                logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
+                # Проверим текущий вебхук и обновим только при необходимости для экономии запросов
+                current_webhook = await tg_app.bot.get_webhook_info()
+                if current_webhook.url != webhook_url:
+                    await tg_app.bot.set_webhook(url=webhook_url)
+                    logger.info(f"Установлен Telegram Webhook на: {webhook_url}")
+                else:
+                    logger.info("Telegram Webhook уже установлен корректно. Пропуск.")
             except telegram_error.RetryAfter as e:
-                # Если воркер попал под ограничение (429), это, вероятно, означает, 
-                # что другой воркер уже установил его.
                 logger.warning(f"Ошибка Rate Limit при установке вебхука: {e}. Продолжаем работу.")
             except Exception as e:
                  logger.error(f"Непредвиденная ошибка при установке вебхука: {e}")
         else:
             logger.warning("BASE_URL не установлен. Webhook не установлен.")
+
+# --- НАСТРОЙКА WEBHOOK ---
+if tg_app:
+    @app.on_event("startup")
+    async def startup_event():
+        # 1. КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Инициализация Application (быстрая, синхронная часть)
+        try:
+            # initialize() — это быстрый вызов, который подготавливает внутренние структуры.
+            await tg_app.initialize()
+            logger.info("Telegram Application инициализирован для асинхронной работы.")
+        except Exception as e:
+            logger.error(f"Ошибка при инициализации Telegram Application: {e}")
+        
+        # 2. ВЫНЕСЕНО: Запускаем установку вебхука как фоновую задачу (не блокирует запуск Uvicorn)
+        asyncio.create_task(set_telegram_webhook())
+        logger.info("Задача установки Webhook запущена в фоне.")
+
 
     # Точка входа для Telegram Webhook
     @app.post("/bot_webhook")
@@ -240,9 +251,7 @@ if tg_app:
         try:
             body = await request.json()
             update_obj = Update.de_json(data=body, bot=tg_app.bot) 
-            # ИСПРАВЛЕНО: Вместо использования внутренней очереди (update_queue) 
-            # используем официальный метод post_update, который обрабатывает обновления.
-            # Теперь работает, так как Application инициализирован (initialize() в startup_event).
+            # Обработка обновления
             await tg_app.post_update(update_obj) 
             return {"status": "ok"}
         except Exception as e:
