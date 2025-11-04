@@ -1,41 +1,52 @@
 import os
 import json
 import logging
-import asyncio
 import time
 
 # --- Firebase Imports ---
-try:
-    import firebase_admin
-    from firebase_admin import credentials
-    # Импортируем Firestore
-    from firebase_admin import firestore 
-except ImportError:
-    # Убедитесь, что 'firebase-admin' добавлен в requirements.txt
-    pass
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore 
 
 # --- FastAPI/Uvicorn Imports ---
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel 
 
 # Настраиваем логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 1. Основное приложение FastAPI (Веб-хук)
-# !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: ПЕРЕНОС ИНИЦИАЛИЗАЦИИ В НАЧАЛО !!!
+# =======================================================
+# 1. ОСНОВНОЕ ПРИЛОЖЕНИЕ FASTAPI (КРИТИЧЕСКИЙ БЛОК)
+# =======================================================
 app = FastAPI()
 
 # Глобальные переменные для Firebase
 db = None
 APP_ID = "tashboss_game" # Ваш уникальный идентификатор приложения
 
+# --- Конфигурация Игры ---
+INITIAL_INDUSTRIES_CONFIG = {
+    # Сектор 1: Базовый (стартовый, бесплатный)
+    "1": {"name": "Базовый Сектор", "base_cost": 0, "base_income": 1}, 
+    # Сектор 2: Первая покупка
+    "2": {"name": "Ферма", "base_cost": 5000, "base_income": 10},
+    # Сектор 3: Вторая покупка
+    "3": {"name": "Магазин", "base_cost": 25000, "base_income": 50},
+}
+
 # --- Pydantic Models для запросов ---
 class CollectIncomeRequest(BaseModel):
     user_id: int # Telegram ID пользователя
     sector_id: str
 
-# 2. Инициализация Firebase/Firestore
+class BuySectorRequest(BaseModel):
+    user_id: int
+    sector_id: str
+
+# =======================================================
+# 2. ИНИЦИАЛИЗАЦИЯ FIREBASE
+# =======================================================
 def initialize_firebase():
     """Инициализирует Firebase и создает клиент Firestore."""
     global db
@@ -52,7 +63,6 @@ def initialize_firebase():
         
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
-            # Инициализируем клиент Firestore
             db = firestore.client()
             logger.info("INFO: Firebase успешно инициализирован и Firestore client готов к работе.")
         
@@ -70,11 +80,9 @@ initialize_firebase()
 def get_player_ref(user_id: int):
     """Возвращает ссылку на документ игрока в публичной коллекции."""
     if not db:
-        # Если база данных не инициализирована, поднимаем ошибку
         raise Exception("Database not initialized. Check FIREBASE_CREDENTIALS_JSON.")
     
     # Путь: /artifacts/{APP_ID}/public/data/players/{user_id}
-    # Используем асинхронный доступ (collection.document(str(user_id)))
     return db.collection(f"artifacts/{APP_ID}/public/data/players").document(str(user_id))
 
 def get_initial_player_data(user_id: int) -> dict:
@@ -85,17 +93,17 @@ def get_initial_player_data(user_id: int) -> dict:
         "last_login": int(time.time()),
         "sectors": {
             "1": {
-                "income_per_second": 1,
+                "income_per_second": INITIAL_INDUSTRIES_CONFIG["1"]["base_income"],
                 "last_collect_time": int(time.time()),
                 "level": 1
             }
         },
-        "industries_config": {
-            "1": {"name": "Базовый Сектор", "base_cost": 100}
-        }
+        "industries_config": INITIAL_INDUSTRIES_CONFIG
     }
 
-# --- Основные API Endpoints ---
+# =======================================================
+# 3. ОСНОВНЫЕ API ENDPOINTS
+# =======================================================
 
 @app.head("/")
 async def head_root():
@@ -105,23 +113,21 @@ async def head_root():
 @app.get("/")
 async def root():
     """Основная конечная точка для проверки работоспособности."""
-    return {"message": "Telegram Bot Webhook is running."}
+    return {"message": "Tashboss Game API is running."}
 
 @app.get("/api/load_state")
 async def load_state(user_id: int):
     """
-    Загружает состояние игрока из Firestore, рассчитывает накопленную прибыль
-    и создает новый профиль, если он не существует.
+    Загружает состояние игрока и рассчитывает накопленную прибыль.
     """
     try:
         player_ref = get_player_ref(user_id)
-        # Обратите внимание: метод .get() в firebase-admin асинхронный
         player_doc = player_ref.get()
 
         if not player_doc.exists:
             # Создаем нового игрока
             initial_data = get_initial_player_data(user_id)
-            player_ref.set(initial_data) # set() не асинхронный
+            player_ref.set(initial_data)
             data = initial_data
             logger.info(f"Создан новый игрок: {user_id}")
         else:
@@ -135,10 +141,10 @@ async def load_state(user_id: int):
             last_collect = sector.get("last_collect_time", current_time)
             income_per_second = sector.get("income_per_second", 0)
             
-            time_elapsed = current_time - last_collect
-            accumulated = time_elapsed * income_per_second
+            # Убеждаемся, что accumulated всегда float или int (без ошибок в расчетах)
+            time_elapsed = max(0, current_time - last_collect)
+            accumulated = int(time_elapsed * income_per_second)
             
-            # Обновляем поле для фронтенда (app.js)
             sector["income_to_collect"] = accumulated
             total_accumulated_income += accumulated
 
@@ -148,28 +154,23 @@ async def load_state(user_id: int):
 
     except Exception as e:
         logger.error(f"Ошибка при загрузке состояния игрока {user_id}: {e}")
-        # Возвращаем ошибку, которую обработает app.js
-        # Нельзя использовать HTTPException, если хотим вернуть JSON с ошибкой
+        # Возвращаем ошибку в JSON, чтобы фронтенд мог ее обработать
         return {"error": str(e)}
 
 @app.post("/api/collect_income")
 async def collect_income(request: CollectIncomeRequest):
     """
-    Обрабатывает запрос на сбор дохода с сектора.
+    Обрабатывает запрос на сбор дохода для конкретного сектора.
     """
     user_id = request.user_id
     sector_id = request.sector_id
     
     if not db:
-        # Используем HTTPException для API-ошибок
         raise HTTPException(status_code=500, detail="Database not initialized")
 
     player_ref = get_player_ref(user_id)
     current_time = int(time.time())
     
-    # 1. Транзакция для безопасного обновления
-    # NOTE: В python-admin SDK транзакции синхронные, поэтому async/await здесь не используется
-    # в самой функции, но конечная точка FastAPI остается асинхронной.
     @firestore.transactional
     def transaction_update(transaction, player_ref):
         snapshot = player_ref.get(transaction=transaction)
@@ -185,21 +186,19 @@ async def collect_income(request: CollectIncomeRequest):
         last_collect = sector.get("last_collect_time", current_time)
         income_per_second = sector.get("income_per_second", 0)
         
-        # Рассчитываем, сколько прошло времени и сколько собрано
         time_elapsed = current_time - last_collect
-        collected_amount = time_elapsed * income_per_second
+        collected_amount = int(time_elapsed * income_per_second)
         
         if collected_amount < 1:
             return {"success": False, "message": "Ещё нет дохода для сбора."}
 
-        # 2. Обновление данных
+        # Обновление данных
         new_balance = data.get("balance", 0) + collected_amount
         
         # Обновляем время последнего сбора и баланс
         data["balance"] = new_balance
         data["sectors"][sector_id]["last_collect_time"] = current_time
         
-        # 3. Сохраняем транзакцию
         transaction.set(player_ref, data)
         
         return {
@@ -208,18 +207,82 @@ async def collect_income(request: CollectIncomeRequest):
             "collected": collected_amount
         }
 
-    # Выполняем транзакцию
     try:
-        # Вызов синхронной функции внутри асинхронной конечной точки
-        # В uvicorn это обычно безопасно, но для чистой асинхронности можно использовать asyncio.to_thread(transaction_update, ...)
         result = transaction_update(db.transaction(), player_ref)
         if result.get("success") is False:
-             # Если транзакция вернула ошибку, бросаем HTTP-ответ
              raise HTTPException(status_code=400, detail=result.get("message"))
         return result
     except HTTPException as e:
-        # Пробрасываем HTTP-ошибки
         raise e
     except Exception as e:
         logger.error(f"Ошибка транзакции сбора дохода для {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка сервера при сборе дохода.")
+
+@app.post("/api/buy_sector")
+async def buy_sector(request: BuySectorRequest):
+    """
+    Покупает новый сектор, если у игрока достаточно средств.
+    """
+    user_id = request.user_id
+    sector_id_to_buy = request.sector_id
+    
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    config = INITIAL_INDUSTRIES_CONFIG.get(sector_id_to_buy)
+    
+    if not config:
+        raise HTTPException(status_code=400, detail="Неверный ID сектора.")
+
+    player_ref = get_player_ref(user_id)
+    current_time = int(time.time())
+    cost = config["base_cost"]
+
+    @firestore.transactional
+    def transaction_buy(transaction, player_ref):
+        snapshot = player_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            raise HTTPException(status_code=404, detail="Игрок не найден.")
+        
+        data = snapshot.to_dict()
+        current_balance = data.get("balance", 0)
+
+        # 1. Проверка: не куплен ли уже сектор?
+        if sector_id_to_buy in data.get("sectors", {}):
+            return {"success": False, "message": "Сектор уже куплен."}
+
+        # 2. Проверка: достаточно ли средств?
+        if current_balance < cost:
+            return {"success": False, "message": "Недостаточно средств для покупки."}
+
+        # 3. Проводим покупку
+        new_balance = current_balance - cost
+        
+        data["balance"] = new_balance
+        
+        # Добавляем новый сектор с его базовым доходом
+        data["sectors"][sector_id_to_buy] = {
+            "income_per_second": config["base_income"],
+            "last_collect_time": current_time,
+            "level": 1
+        }
+        
+        transaction.set(player_ref, data)
+        
+        return {
+            "success": True,
+            "new_balance": new_balance,
+            "cost": cost,
+            "sector_name": config["name"]
+        }
+
+    try:
+        result = transaction_buy(db.transaction(), player_ref)
+        if result.get("success") is False:
+             raise HTTPException(status_code=400, detail=result.get("message"))
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Ошибка транзакции покупки сектора {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка сервера при покупке сектора.")
