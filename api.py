@@ -37,6 +37,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Добавим заголовки, необходимые для авторизации (Authorization)
+    expose_headers=["Authorization"],
 )
 
 # --- КОНФИГУРАЦИЯ ---
@@ -188,9 +190,10 @@ async def load_or_create_state(user_id: str) -> UserState:
         state = UserState(**data)
         logger.info(f"Загружено состояние для UID: {user_id}")
     else:
-        state = UserState()
+        # --- ИЗМЕНЕНИЕ: Добавление стартового капитала (5000 BSS) ---
+        state = UserState(balance=5000.0) 
         await save_state(user_id, state)
-        logger.info(f"Создано новое состояние для UID: {user_id}")
+        logger.info(f"Создано новое состояние со стартовым капиталом для UID: {user_id}")
         
     return state
 
@@ -315,10 +318,13 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         if sector_name not in SECTOR_COSTS:
             raise HTTPException(status_code=400, detail="Неверное название сектора.")
 
-        cost = SECTOR_COSTS[sector_name]
-        
+        # ПЕРЕРАСЧЕТ СТОИМОСТИ: стоимость должна расти с каждой покупкой
         state = await load_or_create_state(user_id)
-
+        current_count = state.sectors.get(sector_name, 0)
+        
+        # Стоимость = Базовая стоимость * (Количество + 1)
+        cost = SECTOR_COSTS[sector_name] * (current_count + 1)
+        
         if state.balance < cost:
             raise HTTPException(status_code=400, detail="Недостаточно средств для покупки.")
         
