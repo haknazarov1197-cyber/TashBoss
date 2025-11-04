@@ -4,11 +4,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- КОНФИГУРАЦИЯ ---
 # ВАЖНО: Замените "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН" на ваш токен бота.
-TOKEN = os.getenv("BOT_TOKEN") or "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН" 
+TOKEN = os.getenv("BOT_TOKEN") or "8339049510:AAGnMH4djhUXKznvLfd40k6GJ-Q8-AYDMkw" 
 
 # ВАЖНО: Замените URL на публичный адрес вашего развернутого FastAPI-сервера
 # Пример: https://tashboss-mini-app.onrender.com
-BASE_URL = os.getenv("BASE_URL") or "https://ВАШ-ПУБЛИЧНЫЙ-ДОМЕН"
+BASE_URL = os.getenv("BASE_URL") or "https://tashboss.onrender.com"
 
 # Полный URL для Web App (должен совпадать с эндпоинтом в api.py)
 WEB_APP_URL = f"{BASE_URL}/webapp"
@@ -58,3 +58,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
