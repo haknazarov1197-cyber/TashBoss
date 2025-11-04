@@ -1,366 +1,736 @@
-import os
-import json
 import time
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any
+import json
+from fastapi import FastAPI, Request, HTTPException, Response
+from pydantic import BaseModel
+from typing import Dict, Any, List, Optional
 
-# --- ИМПОРТ И ИНИЦИАЛИЗАЦИЯ FIREBASE ---
+# --- FIREBASE ИНИЦИАЛИЗАЦИЯ ---
+# Используем глобальные переменные Canvas для конфигурации
+# Эти переменные должны быть доступны в вашей среде развертывания (Render)
 try:
-    import firebase_admin
-    from firebase_admin import credentials, firestore
-    HAS_FIREBASE = True
-except ImportError:
-    # Заглушка для случая, когда firebase-admin не установлен локально
-    HAS_FIREBASE = False
-
-db = None
-auth = None
-firebase_config = None
-app_id = "tashboss-app" 
-
-# Глобальные переменные Canvas (предполагаем, что они передаются из окружения)
-try:
-    if '__firebase_config' in globals():
-        firebase_config = json.loads(globals().get('__firebase_config', '{}'))
-    if '__app_id' in globals():
-        app_id = globals().get('__app_id', 'tashboss-app')
-except Exception:
-    pass # Продолжаем с локальными заглушками
-
-if HAS_FIREBASE and firebase_config and firebase_config != {}:
-    try:
-        # Проверка, была ли уже инициализация
-        if not firebase_admin._apps:
+    from firebase_admin import initialize_app, firestore, credentials
+    # Если запущен в Canvas, используем переданные переменные
+    if '__firebase_config' in globals() and __firebase_config:
+        firebase_config = json.loads(__firebase_config)
+        # Инициализация с помощью переданной конфигурации (для среды Canvas)
+        app_id = globals().get('__app_id', 'default-app-id')
+        
+        # NOTE: В реальной среде Render/Production лучше использовать 
+        # переменную окружения FIREBASE_CREDENTIALS_JSON
+        
+        # Создаем фиктивные учетные данные для инициализации, так как firestore
+        # требует их, но actual auth происходит через Canvas.
+        # В реальном приложении на Render нужно загрузить ключ сервисного аккаунта.
+        
+        # Если вы разворачиваете на Render, вам нужно использовать
+        # credentials.Certificate или credentials.ApplicationDefault()
+        
+        try:
             cred = credentials.Certificate(firebase_config)
-            firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        print("Firestore client initialized successfully.")
-    except Exception as e:
-        print(f"Failed to initialize Firebase Admin SDK: {e}")
-        HAS_FIREBASE = False
+            firebase_app = initialize_app(cred)
+        except Exception:
+            # Fallback для тестовых сред, где нет полного сертификата
+            firebase_app = initialize_app()
+            
+    else:
+        # Для локальной разработки без Canvas
+        firebase_app = initialize_app()
+        app_id = 'local-dev-app-id'
 
+    db = firestore.client()
+    print("Firestore Client Initialized.")
+except ImportError:
+    print("Firebase Admin not installed. Using mock database.")
+    # МОК ДЛЯ ЛОКАЛЬНОЙ РАЗРАБОТКИ БЕЗ FIREBASE
+    db = None
+    app_id = 'local-dev-app-id'
+except Exception as e:
+    print(f"Error initializing Firebase: {e}")
+    db = None
+    app_id = 'local-dev-app-id'
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- КОНФИГУРАЦИЯ ИГРЫ (ОТРАСЛИ) ---
-# Полный список отраслей по вашему плану
+# --- КОНФИГУРАЦИЯ ИГРЫ (10 СЕКТОРОВ) ---
 INDUSTRIES_CONFIG = {
-    "1": {"name": "Уборка улиц", "base_income": 1, "base_cost": 100, "base_cycle_time": 60},
-    "2": {"name": "Коммунальные службы", "base_income": 3, "base_cost": 300, "base_cycle_time": 50},
-    "3": {"name": "Транспорт", "base_income": 8, "base_cost": 1000, "base_cycle_time": 45},
-    "4": {"name": "Парки и зоны отдыха", "base_income": 20, "base_cost": 3000, "base_cycle_time": 40},
-    "5": {"name": "Малый бизнес", "base_income": 50, "base_cost": 8000, "base_cycle_time": 35},
-    "6": {"name": "Заводы и фабрики", "base_income": 120, "base_cost": 20000, "base_cycle_time": 30},
-    "7": {"name": "Качество воздуха", "base_income": 200, "base_cost": 50000, "base_cycle_time": 25},
-    "8": {"name": "IT-парк", "base_income": 500, "base_cost": 120000, "base_cycle_time": 20},
-    "9": {"name": "Туризм", "base_income": 1000, "base_cost": 250000, "base_cycle_time": 15},
-    "10": {"name": "Международное сотрудничество", "base_income": 5000, "base_cost": 1000000, "base_cycle_time": 10},
+    "chorsu_market": {"name": "1. Рынок Чорсу", "base_income": 1, "base_cost": 100, "base_cycle_time": 5},
+    "transport": {"name": "2. Транспорт", "base_income": 2, "base_cost": 250, "base_cycle_time": 8},
+    "communal": {"name": "3. Коммунальные службы", "base_income": 3, "base_cost": 500, "base_cycle_time": 10},
+    "tourism": {"name": "4. Туризм", "base_income": 5, "base_cost": 1000, "base_cycle_time": 12},
+    "ecology": {"name": "5. Экология", "base_income": 8, "base_cost": 2500, "base_cycle_time": 15},
+    "infrastructure": {"name": "6. Инфраструктура", "base_income": 12, "base_cost": 5000, "base_cycle_time": 18},
+    "air_quality": {"name": "7. Качество воздуха", "base_income": 18, "base_cost": 10000, "base_cycle_time": 22},
+    "international": {"name": "8. Международное", "base_income": 25, "base_cost": 20000, "base_cycle_time": 25},
+    "ict": {"name": "9. ИКТ и Цифра", "base_income": 35, "base_cost": 40000, "base_cycle_time": 30},
+    "innovation": {"name": "10. Инновации", "base_income": 50, "base_cost": 80000, "base_cycle_time": 35}
 }
 
-# --- УТИЛИТЫ FIREBASE ---
+# МАКСИМАЛЬНЫЙ УРОВЕНЬ
+MAX_LEVEL = 100
 
-def get_player_doc(user_id: str):
-    """Получает ссылку на документ пользователя в Firestore."""
-    if not db:
-        return None
-    # Используем путь для приватных данных
-    return db.collection("artifacts").document(app_id).collection("users").document(user_id).collection("game_data").document("player_state")
-
-
-def get_default_player_state():
-    """Возвращает начальное состояние игрока."""
-    current_time = int(time.time())
-    
-    initial_sectors = {}
-    for k in INDUSTRIES_CONFIG:
-        # Для начала, пусть первый сектор будет куплен
-        initial_level = 1 if k == "1" else 0
-        initial_sectors[k] = {
-            "level": initial_level, 
-            "last_collect_time": current_time,
-            "is_responsible_assigned": False
-        }
-
-    return {
-        "balance": 100, # Начальный баланс
-        "sectors": initial_sectors,
-        "created_at": current_time
-    }
-
-# --- ОСНОВНАЯ ЛОГИКА ИГРЫ ---
-
-def get_sector_params(sector_id: str, level: int) -> Dict[str, Any]:
+def get_sector_params(sector_key: str, level: int) -> Dict[str, Any]:
     """
-    Рассчитывает текущий доход, время цикла и стоимость улучшения 
-    на основе уровня сектора.
+    Рассчитывает динамические параметры сектора (доход, стоимость, время цикла).
     """
-    config = INDUSTRIES_CONFIG.get(sector_id)
+    config = INDUSTRIES_CONFIG.get(sector_key)
     if not config:
-        return None
+        return {}
 
-    # 1. Доход: линейный рост
-    income_per_cycle = config["base_income"] * level
+    # 1. Доход: Линейный рост
+    income = config["base_income"] * level
 
-    # 2. Время цикла: уменьшается на 0.5 секунды за уровень, но не более чем на 50%
-    base_time = config["base_cycle_time"]
-    time_reduction = (level - 1) * 0.5
-    max_reduction = base_time / 2 
-    
-    current_cycle_time = max(base_time - time_reduction, max_reduction)
-    
-    # 3. Стоимость улучшения: экспоненциальный рост
-    # Уровень N стоит BaseCost * (N^1.2)
-    next_level = level + 1
-    cost = int(config["base_cost"] * (next_level ** 1.2))
+    # 2. Стоимость улучшения: Экспоненциальный рост
+    # Cost = Base_Cost * (Level ^ 1.5)
+    cost = int(config["base_cost"] * (level ** 1.5))
+
+    # 3. Время цикла: Уменьшение до 50% от базового времени при MAX_LEVEL
+    # Уменьшение на 0.5% за каждый уровень
+    reduction_factor = 1.0 - (0.5 * (level / MAX_LEVEL))
+    cycle_time = max(1, int(config["base_cycle_time"] * reduction_factor)) 
 
     return {
-        "income_per_cycle": income_per_cycle,
-        "cycle_time": current_cycle_time,
-        "next_upgrade_cost": cost,
-        "base_cost": config["base_cost"] # Для расчета покупки
+        "income": income,
+        "cost": cost,
+        "cycle_time": cycle_time
     }
 
-def calculate_income_and_time(player_state: Dict[str, Any], sector_id: str) -> Dict[str, Any]:
-    """
-    Рассчитывает накопленный доход и определяет новое время последнего сбора.
-    """
-    sector = player_state["sectors"].get(sector_id)
+# --- МОДЕЛИ ДАННЫХ ---
+
+class PlayerState(BaseModel):
+    user_id: str
+    balance: int
+    total_income: int
+    industries: Dict[str, Dict[str, Any]] # {"chorsu_market": {"level": 1, "last_collect": 1678886400}}
+
+class CollectRequest(BaseModel):
+    user_id: str
+    sector_key: str
+
+class UpgradeRequest(BaseModel):
+    user_id: str
+    sector_key: str
+
+class CollectAllRequest(BaseModel):
+    user_id: str
+
+# --- ФУНКЦИИ БАЗЫ ДАННЫХ (Firestore) ---
+
+def get_player_doc_ref(user_id: str):
+    """Возвращает ссылку на документ игрока в Firestore."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized.")
+    # Путь: /artifacts/{appId}/users/{userId}/game_data/state
+    return db.collection(f"artifacts/{app_id}/users/{user_id}/game_data").document("state")
+
+def get_initial_player_state(user_id: str) -> PlayerState:
+    """Возвращает начальное состояние игрока."""
+    initial_industries = {}
+    for key in INDUSTRIES_CONFIG:
+        initial_industries[key] = {"level": 0, "last_collect": 0, "current_cycle_time": INDUSTRIES_CONFIG[key]['base_cycle_time']}
     
-    if not sector or sector["level"] == 0:
-        return {"income": 0, "new_last_collect_time": sector["last_collect_time"] if sector else int(time.time())}
-
-    # Получаем текущие параметры на основе уровня
-    params = get_sector_params(sector_id, sector["level"])
+    # Игрок начинает с одним купленным сектором для немедленного старта
+    initial_industries["chorsu_market"]["level"] = 1
     
-    income_per_cycle = params["income_per_cycle"]
-    cycle_time = params["cycle_time"]
+    return PlayerState(
+        user_id=user_id,
+        balance=1000, # Начальный баланс увеличен для возможности покупки
+        total_income=0,
+        industries=initial_industries
+    )
 
-    current_time = int(time.time())
-    
-    idle_time = current_time - sector["last_collect_time"]
-    
-    # Рассчитываем количество полных циклов
-    cycles_passed = int(idle_time // cycle_time)
-    income_to_collect = cycles_passed * income_per_cycle
-    
-    # Обновляем время последнего сбора, чтобы не потерять остаток времени (idle_time % cycle_time)
-    new_last_collect_time = sector["last_collect_time"] + (cycles_passed * cycle_time)
-
-    if cycles_passed == 0:
-         new_last_collect_time = sector["last_collect_time"]
-
-    return {
-        "income": income_to_collect,
-        "new_last_collect_time": new_last_collect_time,
-        "current_cycle_time": cycle_time
-    }
-
-# --- API ENDPOINTS (Для Web App) ---
-
-# В этом файле я не включаю HTML, так как вы, вероятно, обслуживаете его отдельно 
-# или он уже был встроен в ваш развернутый API. 
-# Я предполагаю, что конечная точка /webapp в вашей развернутой системе работает.
-
-@app.get("/api/load_state")
-async def load_state(user_id: str):
-    """
-    Загружает состояние игрока из базы данных и рассчитывает накопленную прибыль.
-    """
-    if not HAS_FIREBASE or not db:
-        return JSONResponse({"error": "Database not initialized. Cannot load state."}, status_code=500)
-
-    doc_ref = get_player_doc(user_id)
+def load_player_state(user_id: str) -> PlayerState:
+    """Загружает состояние игрока из Firestore."""
+    if not db:
+        return get_initial_player_state(user_id) # В случае мока, возвращаем начальное
+        
+    doc_ref = get_player_doc_ref(user_id)
     doc = doc_ref.get()
 
     if doc.exists:
-        player_state = doc.to_dict()
+        data = doc.to_dict()
+        # Ensure all sectors exist in state for new sectors
+        for key in INDUSTRIES_CONFIG:
+            if key not in data['industries']:
+                 data['industries'][key] = {"level": 0, "last_collect": 0, "current_cycle_time": INDUSTRIES_CONFIG[key]['base_cycle_time']}
+        return PlayerState(**data)
     else:
-        # Создание нового игрока
-        player_state = get_default_player_state()
-        doc_ref.set(player_state) 
+        initial_state = get_initial_player_state(user_id)
+        # Сохраняем начальное состояние
+        doc_ref.set(initial_state.model_dump())
+        return initial_state
 
-    # Рассчитываем накопленную прибыль для всех секторов
-    accumulated_income = 0
-    sectors_data_for_app = {}
-
-    for sector_id, sector_data in player_state["sectors"].items():
-        current_level = sector_data["level"]
-        params = get_sector_params(sector_id, current_level)
+def save_player_state(state: PlayerState):
+    """Сохраняет состояние игрока в Firestore."""
+    if not db:
+        print("Mock Save: State not saved because DB is not initialized.")
+        return
         
-        # Если куплено (level > 0)
-        if current_level > 0:
-            result = calculate_income_and_time(player_state, sector_id)
-            sector_data["income_to_collect"] = result["income"]
-            sector_data["current_cycle_time"] = result["current_cycle_time"]
-            accumulated_income += result["income"]
-        else:
-            # Если не куплено (level = 0)
-            sector_data["income_to_collect"] = 0
-            sector_data["current_cycle_time"] = INDUSTRIES_CONFIG[sector_id]["base_cycle_time"]
-
-        # Стоимость: Если level > 0, то берем следующую стоимость; если level = 0, то берем base_cost
-        if current_level > 0:
-            sector_data["next_upgrade_cost"] = params["next_upgrade_cost"]
-            sector_data["income_per_cycle"] = params["income_per_cycle"]
-        else:
-            sector_data["next_upgrade_cost"] = params["base_cost"]
-            sector_data["income_per_cycle"] = params["income_per_cycle"] # будет base_income * 0 = 0, но это ок
-
-        sectors_data_for_app[sector_id] = sector_data
+    doc_ref = get_player_doc_ref(state.user_id)
+    doc_ref.set(state.model_dump())
 
 
-    # Обновляем состояние игрока для отправки в Mini App
-    player_state["sectors"] = sectors_data_for_app
-    player_state["total_accumulated_income"] = accumulated_income
-    
-    # Отправляем полный список секторов (включая имена) для рендеринга
-    player_state["industries_config"] = INDUSTRIES_CONFIG 
+# --- ЛОГИКА ИГРЫ ---
 
-    return JSONResponse(player_state)
-
-@app.post("/api/collect_income")
-async def collect_income(request: Request):
+def calculate_income_and_update_state(state: PlayerState, current_time: float) -> PlayerState:
     """
-    Обрабатывает запрос на сбор дохода от Web App.
+    Рассчитывает накопленный доход для всех секторов и обновляет состояние.
+    Не собирает доход, а только рассчитывает, сколько можно собрать.
     """
-    if not HAS_FIREBASE or not db:
-        return JSONResponse({"error": "Database not initialized"}, status_code=500)
+    for key, sector_data in state.industries.items():
+        level = sector_data["level"]
+        if level > 0:
+            params = get_sector_params(key, level)
+            cycle_time = params["cycle_time"]
+            income_per_cycle = params["income"]
+            last_collect = sector_data["last_collect"]
 
-    try:
-        data = await request.json()
-        user_id = str(data.get("user_id"))
-        sector_id = str(data.get("sector_id"))
-    except Exception:
-        return JSONResponse({"error": "Invalid request format"}, status_code=400)
+            if last_collect > 0:
+                elapsed = current_time - last_collect
+                # Сколько полных циклов прошло
+                cycles_completed = int(elapsed / cycle_time)
+                
+                # Обновляем состояние сектора для фронтенда
+                sector_data["income_to_collect"] = cycles_completed * income_per_cycle
+                sector_data["remaining_time"] = cycle_time - (elapsed % cycle_time) if cycles_completed == 0 else 0
+                sector_data["cycle_time"] = cycle_time # Передаем актуальное время цикла
+            else:
+                # Если только что куплен (last_collect=0), считаем, что цикл только начался
+                sector_data["income_to_collect"] = 0
+                sector_data["remaining_time"] = cycle_time
+                sector_data["cycle_time"] = cycle_time
 
-    doc_ref = get_player_doc(user_id)
-    
-    # Используем транзакцию для безопасного обновления
-    @firestore.transactional
-    def update_in_transaction(transaction, doc_ref):
-        doc = doc_ref.get(transaction=transaction)
-        
-        if not doc.exists:
-            return {"success": False, "message": "User state not found"}
+    return state
 
-        player_state = doc.to_dict()
-        sector_data = player_state["sectors"].get(sector_id)
-        
-        if not sector_data or sector_data["level"] == 0:
-            return {"success": False, "message": "Sector not purchased or not found"}
 
-        # 1. Рассчитываем, сколько можно собрать
-        result = calculate_income_and_time(player_state, sector_id)
-        income_to_collect = result["income"]
-        new_last_collect_time = result["new_last_collect_time"]
+# --- FASTAPI ИНИЦИАЛИЗАЦИЯ ---
 
-        if income_to_collect > 0:
-            # 2. Обновляем баланс и время сбора в транзакции
-            player_state["balance"] += income_to_collect
-            player_state["sectors"][sector_id]["last_collect_time"] = new_last_collect_time
+app = FastAPI(title="TashBoss Game API")
 
-            # 3. Сохраняем обновленное состояние
-            transaction.set(doc_ref, player_state)
 
-            return {
-                "success": True, 
-                "collected": income_to_collect, 
-                "new_balance": player_state["balance"]
+@app.get("/webapp")
+async def serve_webapp():
+    """Отдает HTML-страницу Mini App. Это эндпоинт, который должен открывать бот."""
+    # Полный HTML-код для index.html, который вы предоставили ранее
+    html_content = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TashBoss: Мини-Приложение</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#0a5b8f', // Темно-синий
+                        'secondary': '#10a08e', // Бирюзовый
+                        'background': '#1f2937', // Темный фон
+                        'card-bg': '#374151', // Фон карточек
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
             }
-        else:
-            return {"success": False, "message": "No income ready to collect"}
-
-    try:
-        transaction = db.transaction()
-        result = update_in_transaction(transaction, doc_ref)
-        if result.get("success") is True:
-             return JSONResponse(result, status_code=200)
-        elif result.get("success") is False and result.get("message") == "No income ready to collect":
-             return JSONResponse(result, status_code=200)
-        else:
-             return JSONResponse(result, status_code=400)
-
-    except Exception as e:
-        print(f"Transaction error (collect): {e}")
-        return JSONResponse({"error": f"Transaction failed: {e}"}, status_code=500)
-
-@app.post("/api/upgrade_sector")
-async def upgrade_sector(request: Request):
-    """
-    Обрабатывает запрос на улучшение сектора.
-    """
-    if not HAS_FIREBASE or not db:
-        return JSONResponse({"error": "Database not initialized"}, status_code=500)
-
-    try:
-        data = await request.json()
-        user_id = str(data.get("user_id"))
-        sector_id = str(data.get("sector_id"))
-    except Exception:
-        return JSONResponse({"error": "Invalid request format"}, status_code=400)
-
-    doc_ref = get_player_doc(user_id)
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1f2937;
+            color: #f3f4f6;
+            min-height: 100vh;
+        }
+        .card {
+            background-color: #374151;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+        }
+        .btn-primary {
+            background-color: #10b981; /* Зеленый */
+            color: white;
+            transition: background-color 0.1s;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background-color: #059669;
+        }
+        .btn-secondary {
+            background-color: #3b82f6; /* Синий */
+            color: white;
+            transition: background-color 0.1s;
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background-color: #2563eb;
+        }
+        .btn-disabled {
+            background-color: #4b5563;
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
+        .icon {
+            width: 24px;
+            height: 24px;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        .income-ready {
+            border: 2px solid #10b981;
+            animation: pulse-green 1.5s infinite;
+        }
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-6 pb-20">
+    <!-- Инициализация Telegram Web App -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
-    @firestore.transactional
-    def update_in_transaction(transaction, doc_ref):
-        doc = doc_ref.get(transaction=transaction)
+    <div id="loading" class="text-center p-12 text-gray-400">
+        <svg class="animate-spin h-8 w-8 text-secondary mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        Загрузка данных TashBoss...
+    </div>
 
-        if not doc.exists:
-            return {"success": False, "message": "User state not found"}
-
-        player_state = doc.to_dict()
-        sector_data = player_state["sectors"].get(sector_id)
+    <div id="app-content" class="hidden max-w-2xl mx-auto">
         
-        if not sector_data:
-            return {"success": False, "message": "Sector not found"}
+        <!-- HEADER / BALANCE -->
+        <header class="text-center mb-6 p-4 rounded-xl bg-card-bg shadow-lg">
+            <h1 class="text-3xl font-bold text-secondary">TashBoss</h1>
+            <p class="text-sm text-gray-400 mt-1">Симулятор градоначальника</p>
+            <div class="mt-3">
+                <p class="text-xl font-semibold">💰 Баланс: <span id="player-balance">0</span> BSS</p>
+            </div>
+            <div class="mt-4 p-2 bg-gray-600 rounded-lg">
+                <h2 class="text-lg font-medium">Общий доход к сбору: <span id="total-income">0</span> BSS</h2>
+            </div>
+        </header>
 
-        current_level = sector_data["level"]
+        <!-- SECTORS LIST -->
+        <main id="sectors-container" class="space-y-4"></main>
         
-        # Получаем параметры для расчета стоимости
-        params = get_sector_params(sector_id, current_level)
+    </div>
+
+    <!-- MAIN JAVASCRIPT LOGIC -->
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
         
-        # Определяем стоимость: если уровень 0, это покупка; иначе - улучшение
-        cost = params["base_cost"] if current_level == 0 else params["next_upgrade_cost"]
-
-        # Проверка баланса
-        if player_state["balance"] < cost:
-            return {"success": False, "message": "Insufficient balance"}
-
-        # 1. Проводим транзакцию
-        player_state["balance"] -= cost
-        player_state["sectors"][sector_id]["level"] += 1
-        
-        # При первой покупке (level 0 -> 1), устанавливаем время сбора
-        if current_level == 0:
-             player_state["sectors"][sector_id]["last_collect_time"] = int(time.time())
-
-        # 2. Сохраняем обновленное состояние в Firestore
-        transaction.set(doc_ref, player_state)
-
-        return {
-            "success": True, 
-            "new_level": player_state["sectors"][sector_id]["level"],
-            "new_balance": player_state["balance"],
-            "cost": cost
+        let USER_ID = null;
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            USER_ID = tg.initDataUnsafe.user.id;
+        } else {
+            // Заглушка для тестирования вне Telegram (должно быть удалено в продакшене)
+            USER_ID = 'TEST_USER_12345'; 
+            console.warn("Using TEST_USER_ID. Run inside Telegram Web App for real user ID.");
         }
 
-    try:
-        transaction = db.transaction()
-        result = update_in_transaction(transaction, doc_ref)
-        if result.get("success") is True:
-             return JSONResponse(result, status_code=200)
-        else:
-             return JSONResponse(result, status_code=400)
-    except Exception as e:
-        print(f"Transaction error (upgrade): {e}")
-        return JSONResponse({"error": f"Transaction failed: {e}"}, status_code=500)
+        // ВАЖНО: URL вашего развернутого FastAPI сервера
+        const BASE_API_URL = window.location.origin;
+
+        let gameState = {
+            balance: 0,
+            industries: {}
+        };
+        let updateInterval = null;
+
+        // --- API HELPERS ---
+        async function apiFetch(endpoint, method = 'GET', body = null) {
+            const url = `${BASE_API_URL}/api/${endpoint}`;
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: body ? JSON.stringify(body) : null,
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `Server error: ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error("API Fetch Error:", error.message);
+                tg.showAlert(`Ошибка: ${error.message}`);
+                return null;
+            }
+        }
+        
+        // --- GAME LOGIC FUNCTIONS ---
+
+        function formatTime(seconds) {
+            if (seconds <= 0) return 'Готово!';
+            return `${seconds} сек.`;
+        }
+
+        function renderSector(key, sectorData) {
+            const container = document.getElementById('sectors-container');
+            const sectorElement = document.getElementById(`sector-${key}`) || document.createElement('div');
+            sectorElement.id = `sector-${key}`;
+            sectorElement.className = `card p-4 rounded-xl ${sectorData.income_to_collect > 0 ? 'income-ready' : ''}`;
+            
+            const config = sectorData.config; // Configuration from API
+            const level = sectorData.level;
+            const isOwned = level > 0;
+            const nextCost = sectorData.cost;
+            const income = sectorData.income;
+            
+            let statusHTML = '';
+            let buttonsHTML = '';
+
+            if (isOwned) {
+                const remaining = Math.max(0, sectorData.current_cycle_time - (Date.now() / 1000 - sectorData.last_collect) % sectorData.current_cycle_time);
+                
+                statusHTML = `
+                    <p class="text-lg font-bold text-secondary">${config.name} (Ур. ${level})</p>
+                    <p class="text-sm text-gray-300">💰 Прибыль за цикл: ${income} BSS</p>
+                    <div class="mt-2 text-md">
+                        <p class="text-yellow-300">Накоплено: ${sectorData.income_to_collect} BSS</p>
+                        <p class="text-gray-400" id="timer-${key}">${formatTime(Math.ceil(remaining))}</p>
+                    </div>
+                `;
+
+                // Кнопки для купленного сектора
+                buttonsHTML = `
+                    <button class="btn-primary w-full sm:w-1/2 p-2 rounded-lg font-semibold" 
+                            onclick="collectIncome('${key}')"
+                            ${sectorData.income_to_collect === 0 ? 'disabled' : ''}>
+                        📥 Собрать
+                    </button>
+                    <button class="btn-secondary w-full sm:w-1/2 p-2 rounded-lg font-semibold ml-0 sm:ml-2 mt-2 sm:mt-0" 
+                            onclick="upgradeSector('${key}')"
+                            ${gameState.balance < nextCost ? 'disabled' : ''}>
+                        🚀 Улучшить (${nextCost} BSS)
+                    </button>
+                `;
+            } else {
+                // Кнопки для некупленного сектора
+                statusHTML = `
+                    <p class="text-lg font-bold text-secondary">${config.name} (Не куплен)</p>
+                    <p class="text-sm text-gray-300">Базовая прибыль: ${income} BSS</p>
+                    <p class="text-sm text-gray-300">Время цикла: ${sectorData.current_cycle_time} сек.</p>
+                `;
+
+                buttonsHTML = `
+                    <button class="btn-primary w-full p-2 rounded-lg font-semibold" 
+                            onclick="upgradeSector('${key}', true)"
+                            ${gameState.balance < nextCost ? 'disabled' : ''}>
+                        🛒 Купить (${nextCost} BSS)
+                    </button>
+                `;
+            }
+
+            sectorElement.innerHTML = `
+                ${statusHTML}
+                <div class="mt-4 flex flex-col sm:flex-row justify-between">
+                    ${buttonsHTML}
+                </div>
+            `;
+            
+            if (!document.getElementById(`sector-${key}`)) {
+                container.appendChild(sectorElement);
+            }
+        }
+
+        function updateUI() {
+            let totalIncome = 0;
+            const sortedKeys = Object.keys(gameState.industries).sort();
+            
+            // 1. Render Sectors
+            sortedKeys.forEach(key => {
+                const sectorData = gameState.industries[key];
+                if (sectorData.level > 0) {
+                    totalIncome += sectorData.income_to_collect || 0;
+                }
+                renderSector(key, sectorData);
+            });
+            
+            // 2. Update Main Headers
+            document.getElementById('player-balance').textContent = gameState.balance.toLocaleString();
+            document.getElementById('total-income').textContent = totalIncome.toLocaleString();
+
+            // 3. Update Telegram MainButton
+            if (totalIncome > 0) {
+                tg.MainButton.setText(`📥 Собрать ВЕСЬ доход (${totalIncome.toLocaleString()} BSS)`).show().enable();
+                tg.MainButton.onClick(collectAllIncome);
+            } else {
+                tg.MainButton.hide();
+            }
+
+            // 4. Show Content
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('app-content').classList.remove('hidden');
+        }
+        
+        // --- API CALLS ---
+
+        async function loadGameState() {
+            if (!USER_ID) return;
+            
+            const data = await apiFetch(`load_state?user_id=${USER_ID}`);
+            
+            if (data) {
+                gameState = data;
+                
+                // Секторы всегда приходят отсортированными и с актуальными параметрами
+                
+                // Запуск локального таймера, если он еще не запущен
+                if (updateInterval === null) {
+                    updateInterval = setInterval(updateLocalTimers, 1000);
+                }
+                
+                updateUI();
+            }
+        }
+
+        async function collectIncome(sectorKey) {
+            const body = { user_id: USER_ID, sector_key: sectorKey };
+            const result = await apiFetch('collect_income', 'POST', body);
+            if (result) {
+                tg.showNotification({ message: `✅ Собрано: ${result.collected_income} BSS!`, type: 'success' });
+                // Перезагружаем состояние с сервера
+                await loadGameState();
+            }
+        }
+
+        async function collectAllIncome() {
+            const body = { user_id: USER_ID };
+            // Скрыть кнопку сразу, чтобы предотвратить двойное нажатие
+            tg.MainButton.showProgress(); 
+            
+            const result = await apiFetch('collect_all_income', 'POST', body);
+            
+            tg.MainButton.hideProgress();
+            
+            if (result) {
+                tg.showNotification({ message: `✅ Общий доход собран: ${result.total_collected_income} BSS!`, type: 'success' });
+                await loadGameState();
+            }
+        }
+
+        async function upgradeSector(sectorKey, isPurchase = false) {
+            const body = { user_id: USER_ID, sector_key: sectorKey };
+            const result = await apiFetch('upgrade_sector', 'POST', body);
+            
+            if (result) {
+                let message = isPurchase 
+                    ? `🎉 Сектор куплен! Ваш уровень: 1.`
+                    : `🚀 Улучшение завершено! Теперь уровень: ${result.new_level}.`;
+                
+                tg.showNotification({ message: message, type: 'success' });
+                // Перезагружаем состояние с сервера
+                await loadGameState();
+            }
+        }
+
+        // --- LOCAL TIMER LOGIC ---
+
+        function updateLocalTimers() {
+            const currentTimestamp = Date.now() / 1000;
+            let totalIncome = 0;
+
+            Object.keys(gameState.industries).forEach(key => {
+                const sectorData = gameState.industries[key];
+                if (sectorData.level > 0 && sectorData.last_collect > 0) {
+                    const elapsed = currentTimestamp - sectorData.last_collect;
+                    const cycleTime = sectorData.current_cycle_time;
+                    const incomePerCycle = sectorData.income; // Используем income, рассчитанный API
+                    
+                    const cyclesCompleted = Math.floor(elapsed / cycleTime);
+                    const incomeToCollect = cyclesCompleted * incomePerCycle;
+                    
+                    // Обновление UI для накопленного дохода
+                    sectorData.income_to_collect = incomeToCollect;
+                    totalIncome += incomeToCollect;
+
+                    // Обновление UI для таймера
+                    const remaining = Math.ceil(cycleTime - (elapsed % cycleTime));
+                    const timerElement = document.getElementById(`timer-${key}`);
+                    if (timerElement) {
+                        timerElement.textContent = formatTime(remaining);
+                    }
+                    
+                    // Обновление состояния кнопки Собрать
+                    const collectButton = document.querySelector(`#sector-${key} button:first-child`);
+                    if (collectButton) {
+                        if (incomeToCollect > 0) {
+                            collectButton.disabled = false;
+                            document.getElementById(`sector-${key}`).classList.add('income-ready');
+                        } else {
+                            collectButton.disabled = true;
+                            document.getElementById(`sector-${key}`).classList.remove('income-ready');
+                        }
+                    }
+                }
+            });
+            
+            // Обновление главного счетчика и кнопки
+            document.getElementById('total-income').textContent = totalIncome.toLocaleString();
+
+            if (totalIncome > 0) {
+                tg.MainButton.setText(`📥 Собрать ВЕСЬ доход (${totalIncome.toLocaleString()} BSS)`).show().enable();
+                tg.MainButton.onClick(collectAllIncome);
+            } else {
+                tg.MainButton.hide();
+            }
+        }
+
+        // --- INIT ---
+        tg.onEvent('main_button_pressed', collectAllIncome);
+        loadGameState();
+    </script>
+</body>
+</html>
+"""
+    return Response(content=html_content, media_type="text/html")
+
+
+@app.get("/api/load_state", response_model=PlayerState)
+async def load_state_endpoint(user_id: str):
+    """Эндпоинт для загрузки состояния игрока и расчета накопленного дохода."""
+    current_time = time.time()
+    state = load_player_state(user_id)
+    
+    # Рассчитываем и обновляем состояние, чтобы фронтенд знал, сколько собирать
+    # и какое актуальное время цикла/стоимость
+    state = calculate_income_and_update_state(state, current_time)
+    
+    # Добавляем актуальные параметры (доход, стоимость, цикл) в ответ для фронтенда
+    for key, sector_data in state.industries.items():
+        level = sector_data["level"]
+        params = get_sector_params(key, max(1, level + 1)) # Для улучшения берем след. уровень
+        
+        sector_data["income"] = get_sector_params(key, level if level > 0 else 1)["income"] # Актуальный доход на текущем уровне
+        sector_data["cost"] = params["cost"]
+        sector_data["current_cycle_time"] = params["cycle_time"]
+        sector_data["config"] = INDUSTRIES_CONFIG[key]
+        
+    return state
+
+
+@app.post("/api/collect_income")
+async def collect_income_endpoint(request: CollectRequest):
+    """Эндпоинт для сбора дохода с одного сектора."""
+    user_id = request.user_id
+    sector_key = request.sector_key
+    current_time = time.time()
+    
+    state = load_player_state(user_id)
+    sector_data = state.industries.get(sector_key)
+    
+    if not sector_data or sector_data["level"] == 0:
+        raise HTTPException(status_code=400, detail="Sector not owned or invalid.")
+
+    level = sector_data["level"]
+    params = get_sector_params(sector_key, level)
+    cycle_time = params["cycle_time"]
+    income_per_cycle = params["income"]
+    last_collect = sector_data["last_collect"]
+
+    elapsed = current_time - last_collect
+    cycles_completed = int(elapsed / cycle_time)
+
+    if cycles_completed == 0:
+        raise HTTPException(status_code=400, detail="Income is not ready yet.")
+
+    collected_income = cycles_completed * income_per_cycle
+    
+    # Обновляем состояние: добавляем доход и сбрасываем время сбора
+    state.balance += collected_income
+    sector_data["last_collect"] = current_time 
+    
+    save_player_state(state)
+    
+    return {"collected_income": collected_income, "new_balance": state.balance}
+
+
+@app.post("/api/collect_all_income")
+async def collect_all_income_endpoint(request: CollectAllRequest):
+    """Эндпоинт для сбора дохода со ВСЕХ секторов."""
+    user_id = request.user_id
+    current_time = time.time()
+    total_collected_income = 0
+    
+    state = load_player_state(user_id)
+    
+    for key, sector_data in state.industries.items():
+        level = sector_data["level"]
+        if level > 0:
+            params = get_sector_params(key, level)
+            cycle_time = params["cycle_time"]
+            income_per_cycle = params["income"]
+            last_collect = sector_data["last_collect"]
+
+            elapsed = current_time - last_collect
+            cycles_completed = int(elapsed / cycle_time)
+
+            if cycles_completed > 0:
+                collected_income = cycles_completed * income_per_cycle
+                total_collected_income += collected_income
+                
+                # Обновляем время последнего сбора для этого сектора
+                sector_data["last_collect"] = current_time
+    
+    if total_collected_income > 0:
+        state.balance += total_collected_income
+        save_player_state(state)
+        
+    return {"total_collected_income": total_collected_income, "new_balance": state.balance}
+
+
+@app.post("/api/upgrade_sector")
+async def upgrade_sector_endpoint(request: UpgradeRequest):
+    """Эндпоинт для улучшения или покупки сектора."""
+    user_id = request.user_id
+    sector_key = request.sector_key
+    current_time = time.time()
+    
+    state = load_player_state(user_id)
+    sector_data = state.industries.get(sector_key)
+    
+    if not sector_data:
+        raise HTTPException(status_code=400, detail="Invalid sector key.")
+
+    current_level = sector_data["level"]
+    
+    # Уровень, который мы пытаемся купить/улучшить
+    level_to_buy = current_level if current_level > 0 else 0
+    
+    # Стоимость определяется по следующему уровню (если не куплен, то уровень 1)
+    next_level = max(1, current_level + 1)
+    params = get_sector_params(sector_key, next_level)
+    cost = params["cost"]
+    
+    if state.balance < cost:
+        raise HTTPException(status_code=400, detail="Недостаточно BSS для покупки/улучшения.")
+
+    # Вычитаем стоимость и увеличиваем уровень
+    state.balance -= cost
+    sector_data["level"] = next_level
+
+    # Если это была покупка (level 0 -> 1), нужно установить last_collect для старта цикла
+    if current_level == 0:
+        sector_data["last_collect"] = current_time
+    
+    # Обновляем время цикла (оно зависит от нового уровня)
+    sector_data["current_cycle_time"] = get_sector_params(sector_key, next_level)["cycle_time"]
+    
+    save_player_state(state)
+    
+    return {"new_level": next_level, "new_balance": state.balance}
+
+# --- HEALTH CHECK ---
+@app.get("/")
+def read_root():
+    return {"Hello": "TashBoss API is running!"}
