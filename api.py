@@ -1,270 +1,239 @@
+# api.py
 import os
 import sys
-import json
-import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from typing import Dict, Any
 
-from fastapi import FastAPI, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, HTTPException, status
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from pydantic import BaseModel, Field
-
-# Импорты для Firebase/Firestore
 import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
+from firebase_admin import credentials, auth, firestore
 
-# --- КОНФИГУРАЦИЯ ---
+# --- Настройка Firebase ---
+SERVICE_ACCOUNT_KEY = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
 
-# Определяем базовую директорию для надежного поиска index.html
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Инициализация логгирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("api")
-
-# Конфигурация секторов (для новой логики)
-INDUSTRY_CONFIG = {
-    "sector_1": {"name": "Базовый Сектор", "base_income": 1.0, "cost": 0},
-    "sector_2": {"name": "Производство чипсов", "base_income": 5.0, "cost": 1000},
-    "sector_3": {"name": "Сеть кофеен", "base_income": 25.0, "cost": 5000},
-    "sector_4": {"name": "Медиахолдинг", "base_income": 100.0, "cost": 25000},
-}
-
-# --- ИНИЦИАЛИЗАЦИЯ FASTAPI ---
-
-app = FastAPI(title="Tashboss Game API")
-
-# Настройка CORS для работы WebApp
-origins = ["*"] # Разрешаем все источники для простоты развертывания WebApp
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- ИНИЦИАЛИЗАЦИЯ FIREBASE ---
-
-# Получение учетных данных из переменной окружения
-FIREBASE_SERVICE_ACCOUNT_KEY = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
-
-if FIREBASE_SERVICE_ACCOUNT_KEY:
-    try:
-        # Парсинг JSON-ключа
-        cred_json = json.loads(FIREBASE_SERVICE_ACCOUNT_KEY)
-        cred = credentials.Certificate(cred_json)
-        
-        # Инициализация Firebase
-        firebase_app = firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        
-        logger.info("INFO: Firebase успешно инициализирован и Firestore client готов к работе.")
-    except Exception as e:
-        logger.error(f"ERROR: Ошибка инициализации Firebase: {e}")
-        # Выходим, если не удалось инициализировать Firebase
-        sys.exit(1)
-else:
-    logger.error("ERROR: Переменная окружения FIREBASE_SERVICE_ACCOUNT_KEY не найдена.")
+if not SERVICE_ACCOUNT_KEY:
+    # критическая ошибка — без ключа дальнейшая работа бессмысленна
+    print("CRITICAL: FIREBASE_SERVICE_ACCOUNT_KEY environment variable not found.", file=sys.stderr)
     sys.exit(1)
 
-# --- PYDANTIC МОДЕЛИ ---
+try:
+    # SERVICE_ACCOUNT_KEY может быть либо JSON строкой, либо путь к файлу.
+    # Попробуем разобрать как JSON-переменную или как путь к файлу.
+    import json
+    try:
+        service_account_info = json.loads(SERVICE_ACCOUNT_KEY)
+        cred = credentials.Certificate(service_account_info)
+    except Exception:
+        # не JSON — пытаемся считать как путь
+        cred = credentials.Certificate(SERVICE_ACCOUNT_KEY)
+    firebase_admin.initialize_app(cred)
+except Exception as e:
+    print("CRITICAL: Failed to initialize Firebase Admin SDK:", e, file=sys.stderr)
+    sys.exit(1)
 
-class UserState(BaseModel):
-    user_id: int = Field(..., description="Telegram User ID")
+db = firestore.client()
 
-class CollectIncomeRequest(BaseModel):
-    user_id: int = Field(..., description="Telegram User ID")
-    
-class BuySectorRequest(BaseModel):
-    user_id: int = Field(..., description="Telegram User ID")
-    sector_id: str = Field(..., description="ID сектора для покупки (e.g., 'sector_2')")
+# --- Константы игры ---
+INITIAL_STATE = {
+    "balance": 100.0,
+    "sectors": {"sector1": 0, "sector2": 0, "sector3": 0},
+    # last_collection_time будет храниться как timestamp (datetime UTC)
+    "last_collection_time": datetime.now(timezone.utc),
+}
 
-# --- СТАТИЧЕСКИЕ ФАЙЛЫ (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ) ---
+INCOME_RATES = {
+    "sector1": 0.5,   # 0.5 per second
+    "sector2": 2.0,   # 2 per second
+    "sector3": 10.0,  # 10 per second
+}
 
-# Монтирование статических файлов из BASE_DIR, чтобы FastAPI отдавал index.html
-# при запросе корневого URL /
-app.mount("/", StaticFiles(directory=BASE_DIR, html=True), name="static")
+SECTOR_COSTS = {
+    "sector1": 100.0,
+    "sector2": 500.0,
+    "sector3": 2500.0,
+}
 
-# Удаляем корневой GET-роут, так как его заменяет StaticFiles.
-# Оставляем только HEAD для проверок здоровья (health checks).
-@app.head("/")
-async def head_root():
-    return status.HTTP_200_OK
+# --- FastAPI app ---
+app = FastAPI()
 
-# --- УТИЛИТЫ FIREBASE ---
+# Сервим статические файлы (index.html, app.js и т.д.) — находятся в корне проекта
+app.mount("/static", StaticFiles(directory=".", html=True), name="static")
 
-def get_user_doc_ref(user_id: int):
-    """Возвращает ссылку на документ пользователя в коллекции 'users'."""
-    return db.collection("users").document(str(user_id))
+# Роуты для возврата index.html
+@app.get("/", response_class=FileResponse)
+@app.get("/webapp", response_class=FileResponse)
+async def serve_index():
+    return FileResponse("index.html")
 
-def create_initial_state():
-    """Создает начальное состояние игры для нового пользователя."""
-    now = datetime.utcnow()
-    return {
-        "balance": 1000.0,
-        "last_collection_time": now.isoformat(),
-        "sectors": {
-            "sector_1": {"count": 1, "income_rate": INDUSTRY_CONFIG["sector_1"]["base_income"]},
-        },
-        "version": 1,
-    }
 
-def calculate_income(user_state: dict) -> tuple[float, datetime]:
-    """Рассчитывает доход с момента последней коллекции."""
-    
-    last_collection = datetime.fromisoformat(user_state["last_collection_time"])
-    now = datetime.utcnow()
-    
-    time_elapsed = now - last_collection
-    seconds_elapsed = time_elapsed.total_seconds()
-    
-    # Расчет общей ставки дохода в секунду
-    total_income_rate = sum(
-        sector["count"] * sector["income_rate"]
-        for sector in user_state["sectors"].values()
-    )
-    
-    # Расчет накопленного дохода
-    income_gained = total_income_rate * seconds_elapsed
-    
-    return income_gained, now
+# --- Утилиты аутентификации ---
+async def get_auth_data(request: Request) -> Dict[str, Any]:
+    """
+    Получает токен из заголовка Authorization: Bearer <token>
+    и верифицирует его через firebase_admin.auth.verify_id_token.
+    Возвращает payload (включая uid).
+    """
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header missing")
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header malformed")
+    token = parts[1]
+    try:
+        decoded = auth.verify_id_token(token)
+        # decoded содержит uid и другие поля
+        return decoded
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid auth token: {str(e)}")
 
-# --- КОНЕЧНЫЕ ТОЧКИ API ---
+
+# --- Firestore path builder ---
+def user_doc_ref(app_id: str, user_id: str):
+    """
+    Путь: /artifacts/{appId}/users/{userId}/tashboss_clicker/{userId}
+    """
+    return db.document(f"artifacts/{app_id}/users/{user_id}/tashboss_clicker/{user_id}")
+
+
+# --- API endpoints ---
+from google.cloud import firestore as gcfirestore
+
+@firestore.transactional
+def _load_state_tx(transaction: gcfirestore.Transaction, doc_ref: gcfirestore.DocumentReference):
+    snapshot = doc_ref.get(transaction=transaction)
+    if snapshot.exists:
+        data = snapshot.to_dict()
+        # приводим last_collection_time к datetime, если это Timestamp — Firestore делает это автоматически
+        return data
+    else:
+        # инициализируем
+        init = INITIAL_STATE.copy()
+        # Firestore хранит datetime корректно
+        transaction.set(doc_ref, init)
+        return init
 
 @app.post("/api/load_state")
-async def load_state(request: UserState):
-    """
-    Загружает текущее состояние пользователя. Создает новое состояние, если пользователь не найден.
-    """
-    doc_ref = get_user_doc_ref(request.user_id)
-    doc = await doc_ref.get()
+async def load_state(request: Request):
+    auth_data = await get_auth_data(request)
+    uid = auth_data.get("uid")
+    app_id = auth_data.get("aud", "tashboss_webapp")  # fallback appId если нет
+    doc_ref = user_doc_ref(app_id, uid)
+    transaction = db.transaction()
+    try:
+        state = _load_state_tx(transaction, doc_ref)
+        # Преобразуем datetime в ISO для фронтенда
+        if isinstance(state.get("last_collection_time"), datetime):
+            state["last_collection_time"] = state["last_collection_time"].isoformat()
+        return JSONResponse({"status": "ok", "state": state})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load state: {str(e)}")
 
-    if doc.exists:
-        user_state = doc.to_dict()
-        
-        # Дополнительный расчет для фронтенда: сколько дохода накопилось
-        income_gained, _ = calculate_income(user_state)
-        user_state["current_pending_income"] = round(income_gained, 2)
-        
-        logger.info(f"Loaded state for user {request.user_id}")
-        return {"status": "ok", "state": user_state, "config": INDUSTRY_CONFIG}
-    else:
-        # Создаем начальное состояние
-        initial_state = create_initial_state()
-        await doc_ref.set(initial_state)
-        
-        initial_state["current_pending_income"] = 0.0
-        
-        logger.info(f"Created initial state for user {request.user_id}")
-        return {"status": "new_user", "state": initial_state, "config": INDUSTRY_CONFIG}
+
+@firestore.transactional
+def _collect_income_tx(transaction: gcfirestore.Transaction, doc_ref: gcfirestore.DocumentReference):
+    snapshot = doc_ref.get(transaction=transaction)
+    if not snapshot.exists:
+        # Если нет документа — инициализируем
+        state = INITIAL_STATE.copy()
+        transaction.set(doc_ref, state)
+        return state
+    state = snapshot.to_dict()
+    last_time = state.get("last_collection_time")
+    if not isinstance(last_time, datetime):
+        # Если last_collection_time пришёл как строка, попытаемся распарсить
+        try:
+            last_time = datetime.fromisoformat(last_time)
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
+        except Exception:
+            # дефолт
+            last_time = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta = (now - last_time).total_seconds()
+    # Рассчитать доход
+    sectors = state.get("sectors", {"sector1": 0, "sector2": 0, "sector3": 0})
+    income = 0.0
+    for s, count in sectors.items():
+        rate = INCOME_RATES.get(s, 0.0)
+        income += rate * float(count) * delta
+    # Обновляем баланс и время
+    new_balance = float(state.get("balance", 0.0)) + income
+    new_state = {
+        **state,
+        "balance": new_balance,
+        "last_collection_time": now,
+    }
+    transaction.set(doc_ref, new_state)
+    # Преобразование для возврата
+    new_state_return = new_state.copy()
+    new_state_return["collected_income"] = income
+    new_state_return["last_collection_time"] = now.isoformat()
+    return new_state_return
 
 @app.post("/api/collect_income")
-async def collect_income(request: CollectIncomeRequest):
-    """
-    Рассчитывает и добавляет накопленный доход к балансу пользователя.
-    """
-    doc_ref = get_user_doc_ref(request.user_id)
-    doc = await doc_ref.get()
+async def collect_income(request: Request):
+    auth_data = await get_auth_data(request)
+    uid = auth_data.get("uid")
+    app_id = auth_data.get("aud", "tashboss_webapp")
+    doc_ref = user_doc_ref(app_id, uid)
+    transaction = db.transaction()
+    try:
+        result = _collect_income_tx(transaction, doc_ref)
+        return JSONResponse({"status": "ok", "state": result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to collect income: {str(e)}")
 
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="User not found")
 
-    user_state = doc.to_dict()
-    income_gained, now = calculate_income(user_state)
-
-    if income_gained > 0:
-        new_balance = user_state["balance"] + income_gained
-        
-        # Обновляем состояние в Firestore
-        update_data = {
-            "balance": round(new_balance, 2),
-            "last_collection_time": now.isoformat(),
-        }
-        await doc_ref.update(update_data)
-
-        logger.info(f"Collected {income_gained:.2f} income for user {request.user_id}")
-        return {
-            "status": "collected",
-            "income": round(income_gained, 2),
-            "new_balance": round(new_balance, 2),
-            "last_collection_time": now.isoformat(),
-        }
-    else:
-        logger.info(f"No income to collect for user {request.user_id}")
-        return {"status": "no_income", "income": 0.0, "new_balance": round(user_state["balance"], 2)}
-
+@firestore.transactional
+def _buy_sector_tx(transaction: gcfirestore.Transaction, doc_ref: gcfirestore.DocumentReference, sector: str):
+    snapshot = doc_ref.get(transaction=transaction)
+    if not snapshot.exists:
+        # если состояние не существует — инициализируем
+        state = INITIAL_STATE.copy()
+        transaction.set(doc_ref, state)
+        snapshot = doc_ref.get(transaction=transaction)
+    state = snapshot.to_dict()
+    balance = float(state.get("balance", 0.0))
+    sectors = state.get("sectors", {"sector1": 0, "sector2": 0, "sector3": 0})
+    if sector not in SECTOR_COSTS:
+        raise ValueError("Unknown sector")
+    cost = float(SECTOR_COSTS[sector])
+    if balance < cost:
+        raise ValueError("Insufficient balance")
+    # Выполняем покупку
+    balance -= cost
+    sectors[sector] = int(sectors.get(sector, 0)) + 1
+    new_state = {
+        **state,
+        "balance": balance,
+        "sectors": sectors
+    }
+    transaction.set(doc_ref, new_state)
+    # Возвращаем новое состояние
+    if isinstance(new_state.get("last_collection_time"), datetime):
+        new_state["last_collection_time"] = new_state["last_collection_time"].isoformat()
+    return new_state
 
 @app.post("/api/buy_sector")
-async def buy_sector(request: BuySectorRequest):
-    """
-    Позволяет пользователю купить новый сектор, вычитает стоимость из баланса.
-    """
-    sector_id = request.sector_id
-    
-    if sector_id not in INDUSTRY_CONFIG:
-        raise HTTPException(status_code=400, detail="Invalid sector ID")
-        
-    sector_config = INDUSTRY_CONFIG[sector_id]
-    cost = sector_config["cost"]
-
-    doc_ref = get_user_doc_ref(request.user_id)
-
-    # Используем транзакцию для атомарной операции (чтение и запись)
-    @firestore.transactional
-    async def transaction_buy(transaction, doc_ref, sector_id, cost, sector_config):
-        snapshot = await doc_ref.get(transaction=transaction)
-        
-        if not snapshot.exists:
-            raise HTTPException(status_code=404, detail="User not found during transaction")
-        
-        user_state = snapshot.to_dict()
-        
-        # 1. Сначала рассчитываем накопленный доход (важно для точности)
-        income_gained, now = calculate_income(user_state)
-        user_state["balance"] += income_gained
-
-        if user_state["balance"] < cost:
-            # Возвращаем текущий баланс и доход, чтобы фронтенд обновил UI
-            return {
-                "status": "insufficient_funds",
-                "current_balance": round(user_state["balance"], 2),
-                "required_cost": cost,
-                "income_collected": round(income_gained, 2),
-            }
-
-        # 2. Выполняем покупку
-        new_balance = user_state["balance"] - cost
-        
-        # Обновляем количество секторов
-        sectors = user_state.get("sectors", {})
-        sectors[sector_id] = {
-            "count": sectors.get(sector_id, {}).get("count", 0) + 1,
-            "income_rate": sector_config["base_income"]
-        }
-        
-        # 3. Обновляем документ
-        update_data = {
-            "balance": round(new_balance, 2),
-            "sectors": sectors,
-            "last_collection_time": now.isoformat(), # Сбрасываем время после сбора/покупки
-        }
-        transaction.update(doc_ref, update_data)
-        
-        logger.info(f"User {request.user_id} bought sector {sector_id}. New balance: {new_balance:.2f}")
-        return {
-            "status": "success",
-            "new_balance": round(new_balance, 2),
-            "new_sectors": sectors,
-            "income_collected": round(income_gained, 2),
-        }
-
+async def buy_sector(request: Request):
+    auth_data = await get_auth_data(request)
+    uid = auth_data.get("uid")
+    app_id = auth_data.get("aud", "tashboss_webapp")
+    body = await request.json()
+    sector = body.get("sector")
+    if not sector:
+        raise HTTPException(status_code=400, detail="Missing 'sector' in request body")
+    doc_ref = user_doc_ref(app_id, uid)
+    transaction = db.transaction()
     try:
-        # Запуск транзакции
-        return await transaction_buy(db.transaction(), doc_ref, sector_id, cost, sector_config)
+        new_state = _buy_sector_tx(transaction, doc_ref, sector)
+        return JSONResponse({"status": "ok", "state": new_state})
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        logger.error(f"Transaction error for user {request.user_id}: {e}")
-        # Если это HTTPException (например, User not found), она будет перехвачена FastAPI
-        raise HTTPException(status_code=500, detail="Transaction failed due to server error.")
+        raise HTTPException(status_code=500, detail=f"Failed to buy sector: {str(e)}")
+
