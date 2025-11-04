@@ -247,6 +247,10 @@ if tg_app:
     async def telegram_webhook(request: Request):
         try:
             body = await request.json()
+            # --- ВРЕМЕННЫЙ ЛОГ ДЛЯ ОТЛАДКИ ---
+            logger.info(f"Получен входящий JSON от Telegram: {json.dumps(body)}")
+            # --- КОНЕЦ ЛОГА ---
+
             update_obj = Update.de_json(data=body, bot=tg_app.bot) 
             # Обработка обновления
             await tg_app.post_update(update_obj) 
