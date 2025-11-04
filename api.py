@@ -233,7 +233,9 @@ if tg_app:
         try:
             body = await request.json()
             update_obj = Update.de_json(data=body, bot=tg_app.bot) 
-            await tg_app.update_queue.put(update_obj)
+            # ИСПРАВЛЕНО: Вместо использования внутренней очереди (update_queue) 
+            # используем официальный метод post_update, который обрабатывает обновления.
+            await tg_app.post_update(update_obj) 
             return {"status": "ok"}
         except Exception as e:
             logger.error(f"Ошибка обработки вебхука Telegram: {e}")
