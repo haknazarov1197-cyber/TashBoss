@@ -1,55 +1,60 @@
 import os
-import logging
-from telegram import Update, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# --- КОНФИГУРАЦИЯ ---
+# ВАЖНО: Замените "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН" на ваш токен бота.
+TOKEN = os.getenv("BOT_TOKEN") or "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН" 
 
-# NOTE: Для реального деплоя используйте переменные окружения!
-# Ваш токен бота
-TOKEN = os.getenv("BOT_TOKEN") or "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН"
-# URL вашего Mini App. На Render это будет URL вашего API/веб-сервера.
+# ВАЖНО: Замените URL на публичный адрес вашего развернутого FastAPI-сервера
 # Пример: https://tashboss-mini-app.onrender.com
-WEB_APP_URL = os.getenv("WEB_APP_URL") or "http://localhost:8000/webapp"
+BASE_URL = os.getenv("BASE_URL") or "https://ВАШ-ПУБЛИЧНЫЙ-ДОМЕН"
 
-# --- TELEGRAM HANDLERS ---
+# Полный URL для Web App (должен совпадать с эндпоинтом в api.py)
+WEB_APP_URL = f"{BASE_URL}/webapp"
+
+# --------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет приветственное сообщение и кнопку для открытия Web App."""
+    """
+    Отправляет сообщение с кнопкой для открытия Telegram Mini App.
+    """
     user = update.effective_user
     
-    # Создаем кнопку, которая откроет Web App
+    # Кнопка, открывающая Web App
     keyboard = [
-        [
-            InlineKeyboardButton(
-                "🚀 Открыть TashBoss Mini App",
-                web_app=WebAppInfo(url=WEB_APP_URL)
-            )
-        ]
+        [InlineKeyboardButton("🏙 Открыть TashBoss", web_app=WebAppInfo(url=WEB_APP_URL))]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Приветственное сообщение
     await update.message.reply_text(
-        f"👋 Добро пожаловать, {user.first_name}!\n\n"
-        f"Нажмите кнопку ниже, чтобы запустить игру *TashBoss* в Telegram Mini App. "
-        f"Ваш прогресс будет сохранен!",
+        f"👋 Добро пожаловать, *{user.first_name}*!\n\n"
+        f"Управляйте городом и зарабатывайте BossCoin (BSS) в нашем Mini App 👇",
         parse_mode="Markdown",
         reply_markup=reply_markup
     )
 
 
 def main():
-    """Запуск бота."""
+    """Запускает бота."""
     try:
-        app = Application.builder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        logger.info("Bot started polling...")
-        app.run_polling(poll_interval=1.0)
-    except Exception as e:
-        logger.error(f"Error starting bot: {e}")
+        if not TOKEN or TOKEN == "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН":
+            print("ОШИБКА: Пожалуйста, замените 'СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН' на реальный токен вашего бота.")
+            return
 
+        print("Запуск бота...")
+        app = Application.builder().token(TOKEN).build()
+
+        # Обработчик команды /start
+        app.add_handler(CommandHandler("start", start))
+
+        # Запуск polling (для локальной разработки)
+        # На продакшене лучше использовать Webhooks
+        app.run_polling(poll_interval=1)
+        
+    except Exception as e:
+        print(f"Критическая ошибка при запуске бота: {e}")
 
 if __name__ == "__main__":
     main()
