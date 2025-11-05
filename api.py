@@ -69,8 +69,9 @@ init_firebase()
 def calculate_cost(sector_name, current_level):
     """Рассчитывает стоимость следующего уровня сектора."""
     base_cost = SECTOR_COSTS.get(sector_name, 0)
+    # Округляем до целого числа, как указано в ТЗ, чтобы избежать проблем с UI
     cost = base_cost * (COST_MULTIPLIER ** current_level)
-    return round(cost, 2)
+    return round(cost)
 
 def calculate_income(sectors):
     """Рассчитывает общий доход в секунду."""
@@ -260,15 +261,38 @@ def buy_sector(user_id):
         return jsonify({"status": "error", "detail": f"Внутренняя ошибка сервера при покупке. Подробности: {str(e)}", "sector": sector_name}), 500
 
 
+@app.route('/bot_webhook', methods=['POST'])
+def bot_webhook():
+    """
+    Обработчик для вебхука Telegram.
+    Это минимальная заглушка, чтобы бот перестал получать 405 и мог работать.
+    Здесь должна быть логика обработки команд Telegram (например, /start).
+    """
+    try:
+        data = request.get_json(silent=True)
+        if data:
+            # Логируем, чтобы увидеть, что бот отправляет
+            if 'message' in data and 'text' in data['message']:
+                logging.info(f"🤖 Получено сообщение от бота: {data['message']['text']} (Chat ID: {data['message']['chat']['id']})")
+            else:
+                logging.info(f"🤖 Получено обновление от бота: {json.dumps(data)}")
+
+        # Telegram ожидает 200 OK
+        return jsonify({"status": "ok", "description": "Update received and processed."}), 200
+        
+    except Exception as e:
+        logging.error(f"❌ Ошибка в обработчике вебхука: {e}", exc_info=True)
+        # В случае ошибки возвращаем 200, чтобы Telegram не спамил повторными запросами
+        return jsonify({"status": "error", "description": "Webhook error"}), 200
+
+# !!! Секция обслуживания статических файлов остается без изменений !!!
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_index(path):
-    """Обслуживание статического файла index.html."""
+    """Обслуживание статического файла index.html и других ресурсов."""
     
-    # Flask будет искать index.html в текущей директории, благодаря static_folder='.'
     if path == '':
         return app.send_static_file('index.html')
-    # Это позволяет браузеру найти app.js, favicon.ico и другие файлы
     else:
         return app.send_static_file(path)
 
