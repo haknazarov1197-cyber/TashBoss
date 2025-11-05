@@ -5,7 +5,7 @@ import json
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from datetime import datetime, timezone
-from typing import Dict, Any, Tuple, Callable, TypeVar
+from typing import Dict, Any, Tuple, Callable, TypeVar 
 
 # FastAPI/Starlette imports
 from starlette.applications import Starlette
@@ -21,9 +21,10 @@ import firebase_admin
 from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
 # --- ИСПРАВЛЕНО: Удалили некорректный импорт _firestore_helpers ---
 
-# --- Типизация для транзакций (опционально, но полезно)
+# --- Типизация для транзакций: используем firestore.Transaction (с большой буквы 'T') ---
 T = TypeVar('T')
-FirestoreTransaction = firestore.transaction
+# ИСПРАВЛЕНИЕ: Класс для транзакции в SDK называется Transaction (с большой буквы 'T')
+FirestoreTransaction = firestore.Transaction 
 
 # --- Configuration and Initialization ---
 
