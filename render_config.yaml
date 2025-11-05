@@ -1,14 +1,14 @@
-# Render Blueprint для развертывания FastAPI
+# Render Blueprint для развертывания Starlette (FastAPI)
 services:
   - type: web
     name: tashboss-api
     env: python
+    
     # Команда, которую Render выполнит для установки зависимостей
-    # Убедитесь, что uvicorn присутствует в вашем requirements.txt
     buildCommand: "pip install -r requirements.txt"
     
-    # ИСПРАВЛЕННАЯ КОМАНДА ЗАПУСКА: Используем ASGI Worker от Uvicorn
-    # Это решает проблему TypeError: FastAPI.__call__() missing 1 required positional argument: 'send'
+    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ КОМАНДЫ ЗАПУСКА:
+    # Обязательное использование uvicorn.workers.UvicornWorker для Starlette/FastAPI
     startCommand: "gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
     
     envVars:
