@@ -47,13 +47,16 @@ TOKEN = os.getenv("BOT_TOKEN")
 BASE_URL = os.getenv("BASE_URL") or "https://tashboss.onrender.com"
 WEB_APP_URL = f"{BASE_URL}" 
 
+# Переменные для отладки
+PROJECT_ID = "N/A"
+FIREBASE_INIT_STATUS = False
 # --------------------
 
 # Инициализация Firebase Admin SDK
 db = None
 def initialize_firebase():
     """Инициализация Firebase Admin SDK с использованием ключа из переменной окружения."""
-    global db
+    global db, PROJECT_ID, FIREBASE_INIT_STATUS
     
     if FIREBASE_KEY_JSON and not firebase_admin._apps:
         try:
@@ -63,21 +66,29 @@ def initialize_firebase():
             
             # Парсим JSON-строку
             cred_dict = json.loads(cleaned_json_string)
+            PROJECT_ID = cred_dict.get('project_id', 'PROJECT_ID_MISSING_IN_KEY')
+            
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
             db = firestore.client()
+            FIREBASE_INIT_STATUS = True
             logger.info("Firebase Admin SDK успешно инициализирован.")
         except json.JSONDecodeError as e:
             logger.error(f"Ошибка JSONDecodeError при парсинге ключа Firebase: {e}. Проверьте форматирование ключа.")
             db = None
+            FIREBASE_INIT_STATUS = False
         except Exception as e:
             logger.error(f"Непредвиденная ошибка инициализации Firebase Admin SDK: {e}")
             db = None
+            FIREBASE_INIT_STATUS = False
     elif firebase_admin._apps:
         db = firestore.client()
+        PROJECT_ID = firebase_admin.get_app().project_id if firebase_admin.get_app().project_id else "UNKNOWN_FROM_APP"
+        FIREBASE_INIT_STATUS = True
         logger.info("Firebase Admin SDK уже инициализирован.")
     else:
         logger.warning("FIREBASE_SERVICE_ACCOUNT_KEY не установлен. Firestore будет недоступен.")
+        FIREBASE_INIT_STATUS = False
 
 initialize_firebase()
 
@@ -397,6 +408,33 @@ async def check_database_status():
                 "message": "⚠️ Firestore инициализирован, но запрос к нему не удался.", 
                 "details": f"Возможно, проблема с сетью или правилами безопасности: {str(e)}"
             }
+
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПОДРОБНОЙ ОТЛАДКИ ---
+@app.get("/api/debug_info")
+async def debug_info():
+    """Возвращает подробную информацию о статусе инициализации Firebase и ID проекта."""
+    
+    # Проверка, была ли инициализация успешной
+    if not FIREBASE_INIT_STATUS:
+        return {
+            "status": "critical_error",
+            "message": "❌ Инициализация Firebase не удалась.",
+            "project_id_from_key": PROJECT_ID,
+            "details": "Ключ JSON не был корректно распарсен. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY."
+        }
+        
+    # Если инициализация успешна, пробуем сделать запрос к DB
+    db_status = await check_database_status()
+    
+    return {
+        "status": "ok_ready" if db_status["status"] == "ok" else db_status["status"],
+        "message": "✅ Бэкенд запущен и Firebase инициализирован.",
+        "project_id_from_key": PROJECT_ID,
+        "db_check_result": db_status["message"],
+        "db_check_details": db_status["details"] if db_status["status"] != "ok" else "DB Check OK. Game should run with 'test_user_for_debug'."
+    }
+# КОНЕЦ НОВОГО ЭНДПОИНТА
+    
 
 # --- ОБСЛУЖИВАНИЕ СТАТИЧЕСКИХ ФАЙЛОВ И WEBAPP ---
 
