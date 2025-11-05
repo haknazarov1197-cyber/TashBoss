@@ -73,12 +73,7 @@ async def startup_event():
     
     # 1. Инициализация Firebase
     try:
-        # Ключ сервисного аккаунта в виде JSON-строки
-        
         # --- БЕЗОПАСНАЯ ОБРАБОТКА BASE64 КЛЮЧА ---
-        # Ошибка 'Incorrect padding' означает, что FIREBASE_KEY не является правильно 
-        # дополненной строкой Base64. Добавляем недостающее дополнение (==) для исправления.
-        
         # Рассчитываем и добавляем необходимое количество символов '=' для Base64 padding
         padding_needed = -len(FIREBASE_KEY) % 4
         padded_key = FIREBASE_KEY + '=' * padding_needed
@@ -93,19 +88,28 @@ async def startup_event():
         db = firestore.client()
         logger.info("✅ Firebase успешно инициализирован.")
     except Exception as e:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase. Ключ сервисного аккаунта (FIREBASE_SERVICE_ACCOUNT_KEY) неверен или скопирован не полностью. Ошибка: {e}")
+        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase. Ошибка: {e}")
         sys.exit(1)
 
     # 2. Инициализация Telegram Application (используя код из bot.py)
+    webhook_url = f"{BASE_URL}/webhook"
     try:
         telegram_application = get_telegram_application(BOT_TOKEN, BASE_URL)
         logger.info("✅ Telegram Application успешно инициализирован.")
-        # Запуск фонового процесса для обработки обновлений Webhook
-        await telegram_application.bot.set_webhook(url=f"{BASE_URL}/webhook")
-        logger.info(f"✅ Webhook установлен на: {BASE_URL}/webhook")
+        
+        # Установка Webhook. Используем force_set=True для гарантированной установки.
+        await telegram_application.bot.set_webhook(url=webhook_url, allowed_updates=["message"])
+        
+        # Дополнительная проверка: Получаем информацию о вебхуке для подтверждения
+        webhook_info = await telegram_application.bot.get_webhook_info()
+        
+        if webhook_info.url == webhook_url:
+            logger.info(f"✅ Webhook успешно установлен и подтвержден на: {webhook_info.url}")
+        else:
+            logger.error(f"⚠️ Webhook установлен, но URL не совпадает. Ожидался: {webhook_url}, Получен: {webhook_info.url}")
 
     except Exception as e:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Telegram Application: {e}")
+        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Telegram Application или установить Webhook: {e}")
         sys.exit(1)
 
 # --- АУТЕНТИФИКАЦИЯ ---
@@ -281,7 +285,8 @@ async def webhook(request: Request):
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Error processing webhook update: {e}")
-        return {"status": "error", "message": str(e)}, 500
+        # Возвращаем 200 OK, даже если произошла ошибка, чтобы Telegram не пытался повторно отправить обновление
+        return {"status": "error", "message": str(e)}, 200
 
 # --- СТАТИЧЕСКИЕ ФАЙЛЫ (Обслуживание WebApp) ---
 
