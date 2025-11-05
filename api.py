@@ -10,7 +10,8 @@ from google.cloud.firestore_v1.base_document import DocumentSnapshot
 # --- НАСТРОЙКА ---
 logging.basicConfig(level=logging.INFO)
 
-app = Flask(__name__)
+# !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ 1: Явно указываем Flask использовать текущую директорию (.) как статическую.
+app = Flask(__name__, static_folder='.') 
 
 # Глобальные переменные, которые будут инициализированы
 db = None
@@ -263,14 +264,14 @@ def buy_sector(user_id):
 @app.route('/<path:path>')
 def serve_index(path):
     """Обслуживание статического файла index.html."""
-    return app.send_static_file('index.html')
+    
+    # Flask будет искать index.html в текущей директории, благодаря static_folder='.'
+    if path == '':
+        return app.send_static_file('index.html')
+    # Это позволяет браузеру найти app.js, favicon.ico и другие файлы
+    else:
+        return app.send_static_file(path)
 
-# Примечание: Для Render нам нужно, чтобы статическое содержимое было доступно.
-# Flask по умолчанию ищет статические файлы в папке 'static', 
-# но поскольку у нас только index.html и app.js в корне, мы будем использовать 
-# специальный route для index.html и полагаться на app.send_static_file.
-# Для app.js мы полагаемся на то, что браузер его найдет, 
-# если он находится в той же папке, что и index.html.
 
 if __name__ == '__main__':
     # Эта часть не должна выполняться в Render
