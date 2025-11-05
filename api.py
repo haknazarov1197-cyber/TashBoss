@@ -16,18 +16,28 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
-# Firebase Admin SDK imports
+# --- Firebase Admin SDK imports ---
+# КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Используем try/except для предотвращения sys.exit(1)
+# Это позволяет Gunicorn запуститься, даже если библиотеки не сразу видны.
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
     from firebase_admin._firestore_helpers import transactional
-except ImportError:
-    logging.critical("❌ CRITICAL ERROR: Library 'firebase-admin' not found.")
-    sys.exit(1)
+    # Импортируем Update для вебхука Telegram
+    from telegram import Update 
+except ImportError as e:
+    # Заглушки: Если импорт провалился, переменные становятся None
+    firebase_admin = None
+    credentials = None
+    firestore = None
+    auth = None
+    firebase_exceptions = None
+    transactional = lambda f: f # Заглушка для декоратора, чтобы не сломать синтаксис
+    Update = None
+    logging.critical(f"❌ CRITICAL WARNING: Firebase/Telegram libraries not imported at module level: {e}. Checking again in startup_event.")
 
 # Telegram Bot imports (для установки вебхука)
 from telegram.ext import Application
-# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Импортируем функцию-билдер бота
 from bot import get_telegram_application 
 
 # --- Configuration and Initialization ---
@@ -37,13 +47,13 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("api")
 
 # Глобальные переменные
-db: firestore.client = None
+db: firestore.client = None if firestore else None # Условная инициализация
 APP_ID = "tashboss-clicker-app" 
 FIREBASE_INITIALIZED = False
-# КРИТИЧЕСКАЯ ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ХРАНЕНИЯ Application
 tg_application: Application = None 
+TELEGRAM_WEBHOOK_ENABLED = False 
 
-# Логика игры (оставлена как в вашем коде)
+# Логика игры
 SECTORS_CONFIG = {
     'sector1': {'cost': 100, 'income': 0.5},
     'sector2': {'cost': 500, 'income': 2.0},
@@ -70,6 +80,13 @@ class UnauthorizedException(Exception):
 
 async def get_auth_data(request: Request) -> str:
     """Извлекает и верифицирует токен Firebase, возвращая UID пользователя."""
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА
+    if not FIREBASE_INITIALIZED or not auth:
+        logger.error("Authentication failed: Firebase Auth not available.")
+        # Это предотвращает попытку использовать auth.verify_id_token
+        raise UnauthorizedException("Authentication service is unavailable. Backend is not fully initialized.")
+
     auth_header = request.headers.get('authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         logger.warning("Missing or invalid Authorization header.")
@@ -77,16 +94,12 @@ async def get_auth_data(request: Request) -> str:
 
     id_token = auth_header.split(' ')[1]
     
-    # В реальном приложении это должен быть Firebase ID Token, 
-    # полученный в результате обмена initData.
     try:
-        # Для развертывания на Render используем verify_id_token
         decoded_token = auth.verify_id_token(id_token)
         uid = decoded_token['uid']
         return uid
     except firebase_exceptions.AuthError as e:
         logger.error(f"Firebase Auth Error: {e}. Token: {id_token[:10]}...")
-        # Заглушка для случая, когда фронтенд отправляет query_id напрямую
         if len(id_token) > 20 and all(c.isalnum() or c in '_-' for c in id_token):
              logger.warning("Using WebApp Query ID as fallback UID.")
              return id_token
@@ -98,6 +111,9 @@ async def get_auth_data(request: Request) -> str:
 
 def get_user_doc_ref(user_id: str):
     """Возвращает ссылку на документ пользователя в Firestore."""
+    if not db:
+        raise RuntimeError("Firestore is not initialized. Database connection unavailable.")
+        
     # Путь: /artifacts/{appId}/users/{userId}/tashboss_clicker/{userId}
     return db.collection('artifacts').document(APP_ID).collection('users').document(user_id).collection('tashboss_clicker').document(user_id)
 
@@ -107,7 +123,7 @@ def get_current_time_str() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# --- Game Logic Functions (Оставлены как в вашем коде) ---
+# --- Game Logic Functions (unchanged) ---
 
 def calculate_passive_income(state: Dict[str, Any]) -> Tuple[float, datetime]:
     """Рассчитывает доход с момента последнего сбора."""
@@ -146,12 +162,18 @@ def calculate_passive_income(state: Dict[str, Any]) -> Tuple[float, datetime]:
 
 async def handle_api_request(request: Request, endpoint_handler):
     """Общий обработчик для аутентификации и обработки исключений API."""
+    # ПРОВЕРКА ДОСТУПНОСТИ СЕРВИСОВ
+    if not FIREBASE_INITIALIZED or not db:
+        logger.critical(f"Attempted API call {request.url.path} before Firebase initialization.")
+        return JSONResponse({"detail": "Сервис недоступен. Ожидание инициализации базы данных."}, status_code=503)
+
     try:
-        # Аутентификация пользователя
         user_id = await get_auth_data(request)
         return await endpoint_handler(request, user_id)
     except UnauthorizedException as e:
         return JSONResponse({"detail": str(e)}, status_code=401)
+    except RuntimeError as e: # Для ошибки, если db не инициализирован
+        return JSONResponse({"detail": str(e)}, status_code=500)
     except Exception as e:
         logger.error(f"API Error in {request.url.path}: {e}")
         return JSONResponse({"detail": "Внутренняя ошибка сервера"}, status_code=500)
@@ -246,7 +268,7 @@ def buy_sector_transaction(transaction, doc_ref, state: Dict[str, Any], sector_i
         raise ValueError("Invalid sector ID.")
 
     count = state['sectors'].get(sector_id, 0)
-    # Прогрессивное увеличение стоимости (Ур. 1 = 100, Ур. 2 = 200, Ур. 3 = 300...)
+    # Прогрессивное увеличение стоимости
     cost = config['cost'] * (count + 1) 
     
     if state['balance'] < cost:
@@ -295,22 +317,21 @@ async def buy_sector_endpoint(request: Request, user_id: str):
         logger.error(f"Error buying sector for user {user_id}: {e}")
         return JSONResponse({"detail": "Не удалось купить сектор"}, status_code=500)
 
-# --- Telegram Webhook Handler (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ) ---
+# --- Telegram Webhook Handler ---
 
 async def telegram_webhook_handler(request: Request):
     """Обрабатывает входящие вебхуки от Telegram."""
     global tg_application
     
-    if not tg_application:
-        logger.error("Telegram Application not initialized.")
-        return JSONResponse({"status": "Bot not ready"}, status_code=503)
+    if not tg_application or not TELEGRAM_WEBHOOK_ENABLED or not Update:
+        logger.error("Telegram Application not initialized or Update class is missing. Skipping webhook processing.")
+        return JSONResponse({"status": "Bot not ready"}, status_code=200)
         
     try:
         # Читаем тело запроса
         body = await request.json()
         
         # Обрабатываем обновление с помощью Application (требуется для PTB v20.9+)
-        # Мы используем process_update, который умеет парсить body в Update объект
         update = Update.de_json(body, tg_application.bot)
         await tg_application.process_update(update)
 
@@ -318,7 +339,6 @@ async def telegram_webhook_handler(request: Request):
 
     except Exception as e:
         logger.error(f"Error processing Telegram update: {e}")
-        # Всегда возвращаем 200 OK для Telegram, даже при ошибке обработки
         return JSONResponse({"status": "error", "message": str(e)}, status_code=200)
 
 
@@ -326,38 +346,39 @@ async def telegram_webhook_handler(request: Request):
 
 async def startup_event():
     """Событие запуска приложения: инициализация Firebase и Firestore."""
-    global db, FIREBASE_INITIALIZED, tg_application
-    logger.info("⚡️ Starting up and initializing Firebase and Telegram...")
+    global db, FIREBASE_INITIALIZED, tg_application, TELEGRAM_WEBHOOK_ENABLED
+    logger.info("⚡️ Starting up and attempting to initialize Firebase and Telegram...")
 
     FIREBASE_KEY_BASE64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_FALLBACK_TOKEN")
-    # Используем BASE_URL из переменных окружения (важно для Render)
+    BOT_TOKEN = os.environ.get("BOT_TOKEN") 
     BASE_URL = os.environ.get("BASE_URL", "https://tashboss.onrender.com")
     
-    # 1. Инициализация Firebase
-    if not FIREBASE_KEY_BASE64:
-        logger.critical("❌ CRITICAL ERROR: Environment variable FIREBASE_SERVICE_ACCOUNT_KEY is not set.")
+    # 1. Инициализация Firebase (проверяем, что импорты доступны)
+    if firebase_admin and credentials and firestore:
+        if not FIREBASE_KEY_BASE64:
+            logger.critical("❌ CRITICAL ERROR: Environment variable FIREBASE_SERVICE_ACCOUNT_KEY is not set.")
+        else:
+            try:
+                padded_key = add_padding_if_needed(FIREBASE_KEY_BASE64)
+                decoded_key_bytes = b64decode(padded_key)
+                service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
+                
+                cred = credentials.Certificate(service_account_info)
+                firebase_admin.initialize_app(cred)
+                db = firestore.client()
+                
+                FIREBASE_INITIALIZED = True
+                logger.info("✅ Firebase successfully initialized.")
+                
+            except BinasciiError as e:
+                logger.critical(f"❌ CRITICAL ERROR: Failed to init Firebase. Base64 decoding error: {e}. Check the key.")
+            except Exception as e:
+                logger.critical(f"❌ CRITICAL ERROR: Unexpected error during Firebase initialization: {e}")
     else:
-        try:
-            # 1. ПРИМЕНЕНИЕ КРИТИЧЕСКОГО ИСПРАВЛЕНИЯ BASE64 PADDING
-            padded_key = add_padding_if_needed(FIREBASE_KEY_BASE64)
-            decoded_key_bytes = b64decode(padded_key)
-            service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
-            
-            cred = credentials.Certificate(service_account_info)
-            firebase_admin.initialize_app(cred)
-            db = firestore.client()
-            
-            FIREBASE_INITIALIZED = True
-            logger.info("✅ Firebase successfully initialized.")
-            
-        except BinasciiError as e:
-            logger.critical(f"❌ CRITICAL ERROR: Failed to init Firebase. Base64 decoding error: {e}. Check the key.")
-        except Exception as e:
-            logger.critical(f"❌ CRITICAL ERROR: Unexpected error during Firebase initialization: {e}")
-            
+        logger.critical("❌ CRITICAL ERROR: Firebase Admin SDK imports failed. Firestore and Auth APIs will be unavailable.")
+
     # 2. Инициализация Telegram Bot и установка вебхука
-    if BOT_TOKEN != "YOUR_FALLBACK_TOKEN" and FIREBASE_INITIALIZED:
+    if BOT_TOKEN and firebase_admin: # Дополнительная проверка на импорт firebase_admin (для credentials)
         try:
             # ИСПОЛЬЗУЕМ BASE_URL И BOT_TOKEN ИЗ ENV
             tg_application = get_telegram_application(BOT_TOKEN, BASE_URL)
@@ -366,10 +387,16 @@ async def startup_event():
             webhook_url = f"{BASE_URL}/telegram-webhook"
             await tg_application.bot.set_webhook(url=webhook_url)
             
+            TELEGRAM_WEBHOOK_ENABLED = True
             logger.info(f"✅ Telegram Webhook set to: {webhook_url}")
             
+        except ValueError:
+             # Это ловит ошибку, если токен пустой или get_telegram_application не смог построить Application
+            logger.error("❌ ERROR setting Telegram Webhook: Bot token is invalid or missing during application build.")
         except Exception as e:
             logger.error(f"❌ ERROR setting Telegram Webhook: {e}")
+    else:
+        logger.critical("❌ CRITICAL WARNING: BOT_TOKEN is not set or Firebase imports failed. Telegram bot functionality is disabled.")
 
 
 async def homepage_handler(request):
