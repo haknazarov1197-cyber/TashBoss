@@ -4,85 +4,113 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TashBoss - City Clicker</title>
-    <!-- Подключение Telegram WebApp SDK -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Подключение Tailwind CSS CDN -->
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        /* Настройка шрифта Inter и кастомные стили */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #1a1a1a; /* Темный фон по умолчанию */
-            color: #e5e7eb;
             transition: background-color 0.3s;
+            background-color: #1a1a1a; /* Dark default background */
+            color: #f3f4f6;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 20px;
         }
-        .container {
-            max-width: 600px;
+        .container-shadow {
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
         }
         .card-shadow {
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
         }
-        /* Анимация кнопки сбора */
-        #collect-button {
-            transition: transform 0.1s ease-in-out, box-shadow 0.1s ease-in-out;
+        /* Custom styles for Telegram theme consistency */
+        :root {
+            --tg-theme-bg-color: #1a1a1a;
+            --tg-theme-text-color: #f3f4f6;
+            --tg-theme-link-color: #64b5f6;
+            --tg-theme-button-color: #4CAF50;
+            --tg-theme-button-text-color: #ffffff;
         }
-        #collect-button:not(:disabled):active {
-            transform: scale(0.98);
-            box-shadow: none;
+        .buy-button {
+             background-color: var(--tg-theme-button-color, #4CAF50);
+             color: var(--tg-theme-button-text-color, #ffffff);
+        }
+        .buy-button:hover:not(:disabled) {
+             background-color: #45a049; /* Darker green on hover */
+        }
+        .disabled\:bg-gray-500:disabled {
+            background-color: #4b5563 !important; /* Lighter dark gray */
         }
         .balance-box {
-            background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+            background: linear-gradient(135deg, #4f46e5 0%, #a78bfa 100%);
+            animation: gradient-shift 15s ease infinite;
+            background-size: 200% 200%;
+        }
+        @keyframes gradient-shift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .collected-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 8px 16px;
+            background-color: rgba(76, 175, 80, 0.9);
+            color: white;
+            border-radius: 10px;
+            font-weight: bold;
+            z-index: 100;
+            transition: opacity 0.3s;
+            pointer-events: none;
         }
     </style>
 </head>
-<body class="p-4 min-h-screen">
-    <div class="container mx-auto">
-        <!-- Заголовок и статус -->
-        <header class="text-center mb-6">
-            <h1 class="text-4xl font-extrabold text-white mb-2">TashBoss 🏙️</h1>
-            <p class="text-sm text-gray-400">Градостроительный кликер</p>
-            <div class="flex justify-center space-x-4 text-xs mt-2 text-gray-500">
-                <span>TG Status: <span id="tg-status" class="text-yellow-400">Loading...</span></span>
-                <span>API Status: <span id="backend-status" class="text-yellow-400">Idle</span></span>
-            </div>
-        </header>
+<body class="p-4">
 
-        <!-- Блок Баланса и Дохода -->
-        <div class="balance-box p-4 rounded-xl card-shadow mb-6">
-            <div class="flex justify-between items-center mb-2">
-                <div>
-                    <p class="text-sm text-gray-300">Баланс BSS</p>
-                    <p id="balance-display" class="text-4xl font-bold text-yellow-400">0.00</p>
-                </div>
-                <div class="text-right">
-                    <p class="text-sm text-gray-300">Пассивный доход/сек</p>
-                    <p id="income-rate-display" class="text-xl font-bold text-green-400">0.00</p>
-                </div>
-            </div>
+    <div class="w-full max-w-md bg-gray-800 p-5 rounded-3xl container-shadow">
+        <h1 class="text-3xl font-bold text-center text-white mb-6">TashBoss: Город-Кликер</h1>
+
+        <!-- Блок Баланса -->
+        <div class="balance-box p-4 rounded-xl mb-6 text-center text-white">
+            <p class="text-sm opacity-80">Ваш Баланс (BossCoin):</p>
+            <p id="balance-display" class="text-5xl font-extrabold mt-1">0.00</p>
+            <p class="text-xs mt-2 opacity-80">Доход в секунду (BSS/сек): <span id="income-rate-display">0.00</span></p>
+        </div>
+
+        <!-- Блок Сбора Дохода -->
+        <div class="relative bg-gray-700 p-4 rounded-xl mb-6 text-center card-shadow">
+            <h2 class="text-xl font-semibold mb-3">Пассивный Доход</h2>
             
-            <!-- Кнопка сбора дохода -->
-            <div class="relative mt-4">
-                <button id="collect-button" 
-                        class="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition duration-150 ease-in-out disabled:bg-gray-500 disabled:text-gray-300" 
-                        disabled>
-                    Собрать доход (0.00 BSS)
-                </button>
-                <div id="collected-message" class="absolute inset-0 flex items-center justify-center text-white bg-green-700 rounded-xl hidden transition-opacity duration-300">
-                    Доход собран! +0.00 BSS
-                </div>
-            </div>
+            <button id="collect-button" class="w-full py-3 text-lg font-bold rounded-xl transition duration-150 ease-in-out hover:opacity-90">
+                Собрать доход (<span id="collect-amount">0.00</span> BSS)
+            </button>
+            
+            <!-- Сообщение о сборе -->
+            <div id="collected-message" class="collected-message hidden"></div>
         </div>
 
         <!-- Секция Секторов (Магазин) -->
-        <h2 class="text-xl font-semibold text-white mb-3 mt-8 border-b border-gray-700 pb-2">Управление Секторами</h2>
+        <h2 class="text-xl font-semibold text-white mb-4 mt-8">Улучшение Секторов</h2>
         <div id="sectors-container" class="space-y-4">
-            <!-- Секторы будут рендериться здесь из app.js -->
-            <div class="text-center p-8 text-gray-500">Загрузка данных...</div>
+            <!-- Секторы будут рендериться здесь через JS -->
+            <div class="text-center text-gray-400 p-4">Загрузка секторов...</div>
         </div>
+
+        <!-- Отладочная информация (скрыта, но полезна) -->
+        <div class="mt-8 text-xs text-gray-500 border-t border-gray-700 pt-4">
+            <p>Статус TG WebApp: <span id="tg-status">Инициализация...</span></p>
+            <p>Статус API: <span id="backend-status">Ожидание...</span></p>
+        </div>
+
     </div>
 
-    <!-- Подключение скрипта логики -->
+    <!-- JavaScript логика -->
     <script type="module" src="./app.js"></script>
 </body>
 </html>
