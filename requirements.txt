@@ -1,6 +1,6 @@
-fastapi
-python-telegram-bot
+starlette
 firebase-admin
-gunicorn
 uvicorn
-pydantic
+gunicorn
+python-telegram-bot==20.9
+requests
