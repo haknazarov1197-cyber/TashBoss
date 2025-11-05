@@ -1,40 +1,38 @@
 // --- КОНСТАНТЫ И ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
 
-// В Render API URL будет относительным, так как фронтенд и бэкенд на одном домене
+// КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Используем window.location.origin для относительного пути API
 const API_BASE = window.location.origin; 
 const BUY_ENDPOINT = `${API_BASE}/api/buy_sector`;
 const LOAD_ENDPOINT = `${API_BASE}/api/load_state`;
 const COLLECT_ENDPOINT = `${API_BASE}/api/collect_income`;
 
+// Глобальное состояние игры
 let gameState = {
     balance: 0.00,
     sectors: {},
     last_collection_time: new Date().toISOString()
 };
 
+// Метаданные секторов
 const SECTOR_METADATA = [
-    { id: "sector1", name: "Зона отдыха", desc: "Парки и скверы для жителей.", icon: "🌳", base_rate: 0.5 },
-    { id: "sector2", name: "Бизнес-центр", desc: "Коммерческие площади и коворкинги.", icon: "🏢", base_rate: 2.0 },
-    { id: "sector3", name: "Индустриальная зона", desc: "Крупные заводы и склады.", icon: "🏭", base_rate: 10.0 },
+    { id: "sector1", name: "Зона отдыха", desc: "Парки и скверы для жителей.", icon: "🌳", base_rate: 0.5, base_cost: 100.0 },
+    { id: "sector2", name: "Бизнес-центр", desc: "Коммерческие площади и коворкинги.", icon: "🏢", base_rate: 2.0, base_cost: 500.0 },
+    { id: "sector3", name: "Индустриальная зона", desc: "Крупные заводы и склады.", icon: "🏭", base_rate: 10.0, base_cost: 2500.0 },
 ];
 
 const COST_MULTIPLIER = 1.15;
+// Глобальный токен для аутентификации в API
+window.__firebase_id_token = ''; 
 
-// --- УТИЛИТЫ ---
+
+// --- УТИЛИТЫ И ЛОГИКА ---
 
 /**
- * Получает токен авторизации (Query ID) из Telegram WebApp.
- * @returns {string | null}
+ * Возвращает Firebase ID Token из глобальной переменной.
+ * @returns {string}
  */
 const getAuthToken = () => {
-    // Используем initDataUnsafe, как требует бэкенд (для проверки подлинности)
-    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.query_id) {
-        // ВАЖНО: Бэкенд ожидает query_id или initData целиком для проверки.
-        // Передаем initData целиком, чтобы бэкенд мог ее валидировать.
-        return window.Telegram.WebApp.initData;
-    }
-    // Заглушка для режима отладки (если нет токена)
-    return 'DEBUG_TOKEN_PLACEHOLDER'; 
+    return window.__firebase_id_token || ''; 
 };
 
 /**
@@ -43,6 +41,7 @@ const getAuthToken = () => {
  * @returns {string}
  */
 const formatNumber = (value) => {
+    // Используем Math.floor для более "реалистичного" отображения накопления, но округляем для баланса
     return (Math.round(value * 100) / 100).toFixed(2);
 };
 
@@ -53,9 +52,28 @@ const formatNumber = (value) => {
  * @returns {number}
  */
 const calculateCost = (sectorId, currentLevel) => {
-    const baseCost = sectorId === "sector1" ? 100.0 : sectorId === "sector2" ? 500.0 : 2500.0;
+    const baseCost = SECTOR_METADATA.find(m => m.id === sectorId)?.base_cost || 100;
+    // Используем Math.round, чтобы стоимость всегда была целым числом
     return Math.round(baseCost * (COST_MULTIPLIER ** currentLevel));
 };
+
+/**
+ * Рассчитывает текущий накопленный доход без обращения к API.
+ * @param {object} state - Текущее состояние игры
+ * @returns {number}
+ */
+const getUncollectedIncome = (state) => {
+    const totalIncomeRate = SECTOR_METADATA.reduce((sum, meta) => {
+        const level = state.sectors[meta.id] || 0;
+        return sum + meta.base_rate * level;
+    }, 0);
+    
+    const now = new Date();
+    const lastTime = new Date(state.last_collection_time);
+    const timeDeltaSeconds = (now.getTime() - lastTime.getTime()) / 1000;
+    
+    return totalIncomeRate * timeDeltaSeconds;
+}
 
 
 // --- ВЗАИМОДЕЙСТВИЕ С API ---
@@ -67,17 +85,12 @@ const calculateCost = (sectorId, currentLevel) => {
  * @returns {Promise<object | null>} - Объект ответа с данными или null в случае ошибки.
  */
 async function fetchApi(url, body = null) {
-    const authToken = getAuthToken(); // Получаем токен
+    const authToken = getAuthToken(); 
     
-    if (!authToken || authToken === 'DEBUG_TOKEN_PLACEHOLDER') {
-         document.getElementById('backend-status').textContent = 'Ошибка: Нет токена TG';
-         if (url === LOAD_ENDPOINT) {
-            // Разрешаем загрузку в отладочном режиме с заглушкой
-            console.warn("DEBUG MODE: Using placeholder token.");
-         } else {
-             showNotification('Ошибка аутентификации', 'Не удалось получить данные Telegram для авторизации.', 'error');
-             return null;
-         }
+    if (!authToken) {
+         document.getElementById('backend-status').textContent = 'Ошибка: Нет токена Firebase';
+         showNotification('Ошибка аутентификации', 'Не удалось получить токен авторизации.', 'error');
+         return null;
     }
     
     try {
@@ -86,7 +99,7 @@ async function fetchApi(url, body = null) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                // КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Передача токена авторизации
+                // Передача Firebase ID Token
                 'Authorization': `Bearer ${authToken}`
             }
         };
@@ -102,11 +115,11 @@ async function fetchApi(url, body = null) {
             document.getElementById('backend-status').textContent = 'OK';
             return data;
         } else {
-            // Обработка бизнес-логики ошибок (например, "Недостаточно средств")
-            console.error("API Error:", data.detail || 'Неизвестная ошибка API', response.status);
-            document.getElementById('backend-status').textContent = `Ошибка: ${data.detail || 'API Error'}`;
-            // Показываем ошибку пользователю
-            showNotification('Ошибка!', data.detail || 'Ошибка связи с сервером.', 'error');
+            // Обработка ошибок, возвращенных API (напр. 401, 400, 500)
+            const detail = data.detail || 'Неизвестная ошибка API';
+            console.error("API Error:", detail, response.status);
+            document.getElementById('backend-status').textContent = `Ошибка: ${response.status} (${detail})`;
+            showNotification('Ошибка!', detail, 'error');
             return null;
         }
 
@@ -124,9 +137,9 @@ async function fetchApi(url, body = null) {
 async function loadGameState() {
     const data = await fetchApi(LOAD_ENDPOINT);
     if (data && data.state) {
+        // Обновляем глобальное состояние
         Object.assign(gameState, data.state);
         updateUI();
-        // Запускаем таймер сбора дохода только после успешной загрузки
         startIncomeTimer(); 
     }
 }
@@ -136,11 +149,17 @@ async function loadGameState() {
  * @param {string} sectorId 
  */
 async function buySector(sectorId) {
+    // Временно отключаем все кнопки покупки для предотвращения двойного клика
+    document.querySelectorAll('.buy-button').forEach(btn => btn.disabled = true);
+    
     const data = await fetchApi(BUY_ENDPOINT, { sector: sectorId });
+    
+    // Включаем кнопки после завершения запроса (внутри updateUI они будут включены/выключены по логике)
+    document.querySelectorAll('.buy-button').forEach(btn => btn.disabled = false);
+    
     if (data && data.state) {
         Object.assign(gameState, data.state);
         updateUI();
-        // Отправляем обратную связь в Telegram, что покупка прошла успешно
         const sectorName = SECTOR_METADATA.find(s => s.id === sectorId)?.name || sectorId;
         showNotification('Покупка успешна!', `${sectorName} улучшен до ур. ${gameState.sectors[sectorId]}.`, 'success');
     }
@@ -158,13 +177,18 @@ async function collectIncome() {
     if (data && data.state) {
         Object.assign(gameState, data.state);
         
-        // Показываем сообщение о собранном доходе
         const collectedMsg = document.getElementById('collected-message');
         collectedMsg.textContent = `Доход собран! +${formatNumber(data.collected)} BSS`;
         collectedMsg.classList.remove('hidden');
-        setTimeout(() => collectedMsg.classList.add('hidden'), 3000);
+        button.disabled = false;
+        
+        setTimeout(() => {
+             collectedMsg.classList.add('hidden');
+        }, 3000);
         
         updateUI();
+    } else {
+         button.disabled = false;
     }
 }
 
@@ -184,21 +208,15 @@ function updateUI() {
     document.getElementById('income-rate-display').textContent = formatNumber(totalIncome);
 
     // 2. Обновление кнопки сбора
-    const now = new Date();
-    const lastTime = new Date(gameState.last_collection_time);
-    const timeDeltaSeconds = (now.getTime() - lastTime.getTime()) / 1000;
-    const collectedAmount = totalIncome * timeDeltaSeconds;
+    const collectedAmount = getUncollectedIncome(gameState);
     
-    document.getElementById('collect-amount').textContent = formatNumber(collectedAmount);
+    const collectAmountSpan = document.getElementById('collect-amount');
+    collectAmountSpan.textContent = formatNumber(collectedAmount);
     
     const collectButton = document.getElementById('collect-button');
-    if (collectedAmount > 0.01) {
-        collectButton.disabled = false;
-        collectButton.textContent = `Собрать доход (${formatNumber(collectedAmount)} BSS)`;
-    } else {
-        collectButton.disabled = true;
-        collectButton.textContent = `Собрать доход (0.00 BSS)`;
-    }
+    // Включаем кнопку, если есть что собирать
+    collectButton.disabled = collectedAmount < 0.01;
+    collectButton.textContent = `Собрать доход (${formatNumber(collectedAmount)} BSS)`;
     
     // 3. Перерисовка списка секторов
     renderSectors();
@@ -224,13 +242,13 @@ function renderSectors() {
                 <div>
                     <h3 class="text-lg font-semibold text-white">${meta.name} (Ур. ${currentLevel})</h3>
                     <p class="text-xs text-gray-400">${meta.desc}</p>
-                    <p class="text-sm text-green-400 mt-1">Доход: ${formatNumber(meta.base_rate)} BSS/сек</p>
+                    <p class="text-sm text-green-400 mt-1">Доход: ${formatNumber(meta.base_rate * (currentLevel + 1))} BSS/сек</p>
                 </div>
             </div>
             <button 
                 id="buy-${meta.id}" 
                 data-sector-id="${meta.id}"
-                class="buy-button py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition duration-150 ease-in-out disabled:bg-gray-500 disabled:text-gray-300 disabled:cursor-not-allowed text-sm w-28"
+                class="buy-button py-2 px-4 font-bold rounded-lg transition duration-150 ease-in-out disabled:bg-gray-500 disabled:text-gray-300 disabled:cursor-not-allowed text-sm w-28"
                 ${canAfford ? '' : 'disabled'}>
                 Купить за ${formatNumber(nextCost)}
             </button>
@@ -251,14 +269,8 @@ function renderSectors() {
 
 /**
  * Имитирует прибавление пассивного дохода к балансу в UI каждую секунду.
- * ВАЖНО: Это только визуальный эффект. Фактический баланс всегда берется с сервера.
  */
 function startIncomeTimer() {
-    const totalIncomeRate = SECTOR_METADATA.reduce((sum, meta) => {
-        const level = gameState.sectors[meta.id] || 0;
-        return sum + meta.base_rate * level;
-    }, 0);
-    
     // Обновляем UI каждую секунду, чтобы показать накопление дохода и обновить кнопку сбора.
     setInterval(updateUI, 1000);
 }
@@ -281,7 +293,6 @@ function showNotification(title, text, type) {
             buttons: [{ id: 'ok', type: 'ok' }]
         });
         
-        // Показываем toast-уведомление для лучшей обратной связи
         if (webApp.HapticFeedback) {
             if (type === 'success') {
                 webApp.HapticFeedback.notificationOccurred('success');
@@ -290,44 +301,69 @@ function showNotification(title, text, type) {
             }
         }
     } else {
-        // Fallback для старых версий
         console.warn(`[${type}] ${title}: ${text}`);
     }
 }
 
 
-/**
- * Инициализация WebApp.
- */
-function initWebApp() {
-    if (window.Telegram && window.Telegram.WebApp) {
-        const webApp = window.Telegram.WebApp;
-        webApp.ready();
-        
-        // Устанавливаем цвет темы (если применимо)
-        if (webApp.themeParams) {
-             // Используем цвет фона из темы Telegram
-            document.body.style.backgroundColor = webApp.themeParams.bg_color || '#1a1a1a'; 
-        }
+// --- ИНИЦИАЛИЗАЦИЯ FIREBASE И WEBAPP ---
 
-        // Показываем главную кнопку, если она нужна (например, для закрытия)
-        // webApp.MainButton.setText("Закрыть");
-        // webApp.MainButton.onClick(() => webApp.close());
-        // webApp.MainButton.show();
+// Подключаем Firebase SDK
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+async function initWebApp() {
+    document.getElementById('tg-status').textContent = 'Подключение...';
+    
+    // Глобальные переменные Canvas
+    const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+    const initialAuthToken = window.__initial_auth_token;
+
+    if (!firebaseConfig || !initialAuthToken) {
+        document.getElementById('tg-status').textContent = 'Ошибка: Нет конфига/токена Firebase';
+        console.error("Firebase config or auth token is missing. Cannot proceed.");
+        showNotification('Ошибка', 'Отсутствуют данные для аутентификации.', 'error');
+        return;
+    }
+
+    try {
+        // 1. Инициализация Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        getFirestore(app); // Инициализируем Firestore
         
-        document.getElementById('tg-status').textContent = 'Готово';
+        // 2. Аутентификация с помощью Custom Token
+        const userCredential = await signInWithCustomToken(auth, initialAuthToken);
+        const user = userCredential.user;
+
+        // 3. Получение Firebase ID Token для API-запросов
+        const idToken = await user.getIdToken();
+        window.__firebase_id_token = idToken; 
         
-        // 1. Загрузка состояния после инициализации WebApp
+        // 4. Настройка Telegram WebApp
+        if (window.Telegram && window.Telegram.WebApp) {
+            const webApp = window.Telegram.WebApp;
+            webApp.ready();
+            // Настраиваем тему, если доступно
+            if (webApp.themeParams) {
+                document.body.style.backgroundColor = webApp.themeParams.bg_color || '#1a1a1a';
+                // Обновляем CSS-переменные для кнопок
+                document.documentElement.style.setProperty('--tg-theme-button-color', webApp.themeParams.button_color || '#4CAF50');
+                document.documentElement.style.setProperty('--tg-theme-button-text-color', webApp.themeParams.button_text_color || '#ffffff');
+            }
+        }
+        
+        document.getElementById('tg-status').textContent = `Готово (User: ${user.uid.substring(0, 8)}...)`;
+        
+        // 5. Загрузка состояния игры и запуск логики
+        document.getElementById('collect-button').addEventListener('click', collectIncome);
         loadGameState();
 
-        // 2. Установка слушателя на кнопку сбора
-        document.getElementById('collect-button').addEventListener('click', collectIncome);
-
-    } else {
-        // Заглушка для отладки вне Telegram
-        document.getElementById('tg-status').textContent = 'Режим отладки (вне TG)';
-        loadGameState(); 
-        document.getElementById('collect-button').addEventListener('click', collectIncome);
+    } catch (error) {
+        console.error("Authentication or Initialization failed:", error);
+        document.getElementById('tg-status').textContent = 'Ошибка аутентификации';
+        showNotification('Ошибка аутентификации', 'Не удалось войти в систему. Попробуйте перезапустить Mini App.', 'error');
     }
 }
 
