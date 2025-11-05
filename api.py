@@ -20,8 +20,6 @@ from starlette.staticfiles import StaticFiles
 # Firebase Dependencies
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app, auth
-# УДАЛЕНО: from google.cloud.firestore import transaction as firestore_transaction
-# УДАЛЕНО: from google.cloud.firestore import transaction
 # Транзакции обрабатываются декоратором @firestore.transactional, который использует firestore, импортированный выше.
 
 # --- Настройка логирования ---
@@ -149,7 +147,7 @@ async def get_auth_data(request: Request) -> Dict:
         raise HTTPException(status_code=401, detail="Недействительный токен")
 
 
-def get_user_doc_ref(user_id: str) -> firestore.document.DocumentReference:
+def get_user_doc_ref(user_id: str) -> firestore.DocumentReference: # ИСПРАВЛЕНО: Убрано '.document'
     """Возвращает ссылку на документ пользователя в Firestore."""
     # Путь: /artifacts/{appId}/users/{userId}/tashboss_clicker/{userId}
     return DB_CLIENT.document(f'artifacts/{APP_ID}/users/{user_id}/tashboss_clicker/{user_id}')
@@ -187,7 +185,7 @@ def get_initial_state(user_id: str) -> Dict:
 
 
 @firestore.transactional
-def load_state_transaction(transaction, user_doc_ref: firestore.document.DocumentReference, user_id: str) -> Dict:
+def load_state_transaction(transaction, user_doc_ref: firestore.DocumentReference, user_id: str) -> Dict:
     """Загружает или инициализирует состояние игры в транзакции."""
     
     snapshot = user_doc_ref.get(transaction=transaction)
@@ -219,7 +217,7 @@ def load_state_transaction(transaction, user_doc_ref: firestore.document.Documen
 
 
 @firestore.transactional
-def collect_income_transaction(transaction, user_doc_ref: firestore.document.DocumentReference) -> Dict:
+def collect_income_transaction(transaction, user_doc_ref: firestore.DocumentReference) -> Dict:
     """Собирает пассивный доход и обновляет время сбора."""
     
     snapshot = user_doc_ref.get(transaction=transaction)
@@ -257,7 +255,7 @@ def collect_income_transaction(transaction, user_doc_ref: firestore.document.Doc
 
 
 @firestore.transactional
-def buy_sector_transaction(transaction, user_doc_ref: firestore.document.DocumentReference, sector_id: str) -> Dict:
+def buy_sector_transaction(transaction, user_doc_ref: firestore.DocumentReference, sector_id: str) -> Dict:
     """Покупает следующий уровень сектора."""
     
     if sector_id not in SECTORS:
