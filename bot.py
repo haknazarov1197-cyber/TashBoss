@@ -1,61 +1,65 @@
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+import logging
+from telegram import Update, WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- КОНФИГУРАЦИЯ ---
-# ВАЖНО: Замените "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН" на ваш токен бота.
-TOKEN = os.getenv("BOT_TOKEN") or "8339049510:AAGnMH4djhUXKznvLfd40k6GJ-Q8-AYDMkw" 
+# Настройка логирования
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ВАЖНО: Замените URL на публичный адрес вашего развернутого FastAPI-сервера
-# Пример: https://tashboss-mini-app.onrender.com
-BASE_URL = os.getenv("BASE_URL") or "https://tashboss.onrender.com"
+# Получение переменных окружения
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_FALLBACK_TOKEN")
+BASE_URL = os.environ.get("BASE_URL", "https://tashboss.onrender.com")
 
-# Полный URL для Web App (должен совпадать с эндпоинтом в api.py)
-WEB_APP_URL = f"{BASE_URL}/webapp"
+# --- Обработчики команд ---
 
-# --------------------
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет приветственное сообщение и кнопку для запуска Mini App."""
+    if not update.message:
+        return
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Отправляет сообщение с кнопкой для открытия Telegram Mini App.
-    """
-    user = update.effective_user
+    # URL для запуска Mini App. Он должен указывать на корневой путь вашего бэкенда.
+    webapp_url = BASE_URL
     
-    # Кнопка, открывающая Web App
     keyboard = [
-        [InlineKeyboardButton("🏙 Открыть TashBoss", web_app=WebAppInfo(url=WEB_APP_URL))]
+        [
+            InlineKeyboardButton(
+                "🚀 Запустить TashBoss Clicker",
+                web_app=WebAppInfo(url=webapp_url)
+            )
+        ]
     ]
+
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Приветственное сообщение
     await update.message.reply_text(
-        f"👋 Добро пожаловать, *{user.first_name}*!\n\n"
-        f"Управляйте городом и зарабатывайте BossCoin (BSS) в нашем Mini App 👇",
-        parse_mode="Markdown",
-        reply_markup=reply_markup
+        "Добро пожаловать в TashBoss Clicker! Управляйте городом и зарабатывайте BossCoin.",
+        reply_markup=reply_markup,
     )
 
+# --- Функция для получения объекта Application ---
 
-def main():
-    """Запускает бота."""
-    try:
-        if not TOKEN or TOKEN == "СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН":
-            print("ОШИБКА: Пожалуйста, замените 'СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН' на реальный токен вашего бота.")
-            return
-
-        print("Запуск бота...")
-        app = Application.builder().token(TOKEN).build()
-
-        # Обработчик команды /start
-        app.add_handler(CommandHandler("start", start))
-
-        # Запуск polling (для локальной разработки)
-        # На продакшене лучше использовать Webhooks
-        app.run_polling(poll_interval=1)
+def get_telegram_application() -> Application:
+    """Возвращает настроенный объект Application для использования в режиме вебхука."""
+    if BOT_TOKEN == "YOUR_FALLBACK_TOKEN":
+        logger.error("BOT_TOKEN не установлен в переменных окружения. Используется заглушка.")
         
-    except Exception as e:
-        print(f"Критическая ошибка при запуске бота: {e}")
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start_command))
+    
+    # Мы не запускаем run_polling() здесь, так как сервер FastAPI будет обрабатывать вебхуки.
+    return application
+
+# Заглушка для локального тестирования (не используется на Render)
+def main() -> None:
+    application = get_telegram_application()
+    print("Запуск бота в режиме polling (только для локального теста)...")
+    application.run_polling(poll_interval=1.0)
 
 if __name__ == "__main__":
-    main()
-
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
