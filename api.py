@@ -57,8 +57,9 @@ def initialize_firebase():
     
     if FIREBASE_KEY_JSON and not firebase_admin._apps:
         try:
-            # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Очистка JSON-строки
-            cleaned_json_string = FIREBASE_KEY_JSON.strip() 
+            # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ #1: Более агрессивная очистка JSON-строки
+            # Заменяем все символы новой строки и возврат каретки, которые могут быть скопированы из файла ключа
+            cleaned_json_string = FIREBASE_KEY_JSON.replace('\n', '').replace('\r', '').strip()
             
             # Парсим JSON-строку
             cred_dict = json.loads(cleaned_json_string)
@@ -272,8 +273,11 @@ if tg_app:
 async def load_state(request: Request):
     """Загружает состояние игры и применяет пассивный доход, используя Firestore."""
     try:
-        auth_data = await get_auth_data(request)
-        user_id = auth_data.get("uid")
+        # 1. ВРЕМЕННО ОТКЛЮЧАЕМ АУТЕНТИФИКАЦИЮ И ИСПОЛЬЗУЕМ СТАТИЧЕСКИЙ ID
+        # auth_data = await get_auth_data(request)
+        # user_id = auth_data.get("uid")
+        user_id = "test_user_for_debug"
+        # ---------------------------------------------------------------------
 
         # Теперь load_or_create_state полностью асинхронна и безопасна
         state = await load_or_create_state(user_id) 
@@ -290,7 +294,7 @@ async def load_state(request: Request):
         raise e
     except Exception as e:
         logger.error(f"Ошибка в load_state: {e}")
-        # Возвращаем общую ошибку, но знаем, что проблема решена
+        # Возвращаем общую ошибку
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при загрузке состояния.")
 
 
@@ -298,8 +302,11 @@ async def load_state(request: Request):
 async def collect_income(request: Request):
     """Собирает пассивный доход, используя Firestore."""
     try:
-        auth_data = await get_auth_data(request)
-        user_id = auth_data.get("uid")
+        # ВРЕМЕННО ОТКЛЮЧАЕМ АУТЕНТИФИКАЦИЮ
+        # auth_data = await get_auth_data(request)
+        # user_id = auth_data.get("uid")
+        user_id = "test_user_for_debug"
+        # --------------------------------
 
         state = await load_or_create_state(user_id)
         collected_income, current_time = calculate_income(state)
@@ -320,8 +327,12 @@ async def collect_income(request: Request):
 async def buy_sector(req: BuySectorRequest, request: Request):
     """Покупает один сектор, используя Firestore."""
     try:
-        auth_data = await get_auth_data(request)
-        user_id = auth_data.get("uid")
+        # ВРЕМЕННО ОТКЛЮЧАЕМ АУТЕНТИФИКАЦИЮ
+        # auth_data = await get_auth_data(request)
+        # user_id = auth_data.get("uid")
+        user_id = "test_user_for_debug"
+        # --------------------------------
+
         sector_name = req.sector
 
         if sector_name not in SECTOR_COSTS:
@@ -359,12 +370,40 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         logger.error(f"Ошибка в buy_sector: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при покупке сектора.")
 
+# --- ЭНДПОИНТ ДЛЯ ОТЛАДКИ FIREBASE ---
+@app.get("/api/check_db")
+async def check_database_status():
+    """Проверяет статус инициализации Firebase Admin SDK."""
+    if db is None:
+        return {
+            "status": "error", 
+            "message": "❌ Firestore НЕ инициализирован.", 
+            "details": "Проверьте переменную окружения FIREBASE_SERVICE_ACCOUNT_KEY: JSON, возможно, не валиден или содержит лишние символы."
+        }
+    else:
+        # Попробуем сделать легкий запрос, чтобы убедиться, что он работает
+        try:
+            # Делаем асинхронный вызов к тестовому документу
+            await asyncio.to_thread(db.collection("health_check").document("status").get)
+            
+            return {
+                "status": "ok", 
+                "message": "✅ Firestore инициализирован и отвечает.", 
+                "details": "Проблема, вероятно, в другой части кода (но аутентификация отключена, так что это почти гарантирует запуск)."
+            }
+        except Exception as e:
+            return {
+                "status": "warning", 
+                "message": "⚠️ Firestore инициализирован, но запрос к нему не удался.", 
+                "details": f"Возможно, проблема с сетью или правилами безопасности: {str(e)}"
+            }
+
 # --- ОБСЛУЖИВАНИЕ СТАТИЧЕСКИХ ФАЙЛОВ И WEBAPP ---
 
 @app.get("/health_check")
 def read_root():
     """Простой ответ для проверки работоспособности (health check)."""
-    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Async Firestore)."}
+    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Async Firestore and Disabled Auth)."}
 
 # Обслуживание статических файлов (index.html, app.js, style.css)
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
