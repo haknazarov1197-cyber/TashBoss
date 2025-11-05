@@ -34,7 +34,8 @@ telegram_application: Application = None
 # --- КОНСТАНТЫ И КОНФИГУРАЦИЯ ---
 BASE_URL = os.getenv("BASE_URL")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-FIREBASE_KEY = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+# Используем FIREBASE_KEY, который содержит Base64-строку из FIREBASE_SERVICE_ACCOUNT_KEY
+FIREBASE_KEY = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY") 
 APP_ID = os.getenv("APP_ID", "tashboss-mini-app")
 
 if not BASE_URL:
@@ -55,7 +56,6 @@ SECTOR_CONFIG = {
 }
 
 # --- MIDDLEWARE ---
-# CRITICAL FIX: CORS Middleware, чтобы разрешить Telegram WebApp доступ к API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # Разрешаем ВСЕ источники, это необходимо для Telegram WebApp
@@ -74,14 +74,26 @@ async def startup_event():
     # 1. Инициализация Firebase
     try:
         # Ключ сервисного аккаунта в виде JSON-строки
-        service_account_info = json.loads(b64decode(FIREBASE_KEY).decode('utf-8'))
+        
+        # --- БЕЗОПАСНАЯ ОБРАБОТКА BASE64 КЛЮЧА ---
+        # Ошибка 'Incorrect padding' означает, что FIREBASE_KEY не является правильно 
+        # дополненной строкой Base64. Добавляем недостающее дополнение (==) для исправления.
+        
+        # Рассчитываем и добавляем необходимое количество символов '=' для Base64 padding
+        padding_needed = -len(FIREBASE_KEY) % 4
+        padded_key = FIREBASE_KEY + '=' * padding_needed
+        
+        # Декодируем ключ
+        decoded_key_bytes = b64decode(padded_key)
+        service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
+        # --- КОНЕЦ БЕЗОПАСНОЙ ОБРАБОТКИ ---
         
         cred = credentials.Certificate(service_account_info)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
         logger.info("✅ Firebase успешно инициализирован.")
     except Exception as e:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase: {e}")
+        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase. Ключ сервисного аккаунта (FIREBASE_SERVICE_ACCOUNT_KEY) неверен или скопирован не полностью. Ошибка: {e}")
         sys.exit(1)
 
     # 2. Инициализация Telegram Application (используя код из bot.py)
