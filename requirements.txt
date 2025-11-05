@@ -1,6 +1,6 @@
 starlette
-firebase-admin
-uvicorn
-gunicorn
 python-telegram-bot
-requests
+firebase-admin
+gunicorn
+uvicorn
+httpx
