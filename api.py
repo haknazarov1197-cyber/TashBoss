@@ -47,6 +47,10 @@ TOKEN = os.getenv("BOT_TOKEN")
 BASE_URL = os.getenv("BASE_URL") or "https://tashboss.onrender.com"
 WEB_APP_URL = f"{BASE_URL}" 
 
+# КРИТИЧЕСКИЙ ФИКС: Явно указываем ID базы данных, так как она не "default"
+# На основании скриншотов, ID базы данных - "tashboss"
+DATABASE_ID = "tashboss"
+
 # Переменные для отладки
 PROJECT_ID = "N/A"
 FIREBASE_INIT_STATUS = False
@@ -60,19 +64,19 @@ def initialize_firebase():
     
     if FIREBASE_KEY_JSON and not firebase_admin._apps:
         try:
-            # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ #1: Более агрессивная очистка JSON-строки
-            # Заменяем все символы новой строки и возврат каретки, которые могут быть скопированы из файла ключа
             cleaned_json_string = FIREBASE_KEY_JSON.replace('\n', '').replace('\r', '').strip()
-            
-            # Парсим JSON-строку
             cred_dict = json.loads(cleaned_json_string)
             PROJECT_ID = cred_dict.get('project_id', 'PROJECT_ID_MISSING_IN_KEY')
             
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
-            db = firestore.client()
+            
+            # --- КРИТИЧЕСКИЙ ФИКС ПРИМЕНЕН ЗДЕСЬ ---
+            # Явно указываем ID базы данных при создании клиента
+            db = firestore.client(database=DATABASE_ID)
+            
             FIREBASE_INIT_STATUS = True
-            logger.info("Firebase Admin SDK успешно инициализирован.")
+            logger.info(f"Firebase Admin SDK успешно инициализирован. Используется DB ID: {DATABASE_ID}")
         except json.JSONDecodeError as e:
             logger.error(f"Ошибка JSONDecodeError при парсинге ключа Firebase: {e}. Проверьте форматирование ключа.")
             db = None
@@ -82,10 +86,16 @@ def initialize_firebase():
             db = None
             FIREBASE_INIT_STATUS = False
     elif firebase_admin._apps:
-        db = firestore.client()
-        PROJECT_ID = firebase_admin.get_app().project_id if firebase_admin.get_app().project_id else "UNKNOWN_FROM_APP"
-        FIREBASE_INIT_STATUS = True
-        logger.info("Firebase Admin SDK уже инициализирован.")
+        # Если приложение уже инициализировано, просто получаем клиента с нужным ID
+        try:
+             db = firestore.client(database=DATABASE_ID)
+             PROJECT_ID = firebase_admin.get_app().project_id if firebase_admin.get_app().project_id else "UNKNOWN_FROM_APP"
+             FIREBASE_INIT_STATUS = True
+             logger.info(f"Firebase Admin SDK уже инициализирован. Используется DB ID: {DATABASE_ID}")
+        except Exception as e:
+            logger.error(f"Ошибка при получении клиента Firestore с ID {DATABASE_ID}: {e}")
+            db = None
+            FIREBASE_INIT_STATUS = False
     else:
         logger.warning("FIREBASE_SERVICE_ACCOUNT_KEY не установлен. Firestore будет недоступен.")
         FIREBASE_INIT_STATUS = False
@@ -395,11 +405,12 @@ async def check_database_status():
         # Попробуем сделать легкий запрос, чтобы убедиться, что он работает
         try:
             # Делаем асинхронный вызов к тестовому документу
+            # Используем try/except для обработки ошибки 404
             await asyncio.to_thread(db.collection("health_check").document("status").get)
             
             return {
                 "status": "ok", 
-                "message": "✅ Firestore инициализирован и отвечает.", 
+                "message": f"✅ Firestore (ID: {DATABASE_ID}) инициализирован и отвечает.", 
                 "details": "Проблема, вероятно, в другой части кода (но аутентификация отключена, так что это почти гарантирует запуск)."
             }
         except Exception as e:
@@ -428,7 +439,7 @@ async def debug_info():
     
     return {
         "status": "ok_ready" if db_status["status"] == "ok" else db_status["status"],
-        "message": "✅ Бэкенд запущен и Firebase инициализирован.",
+        "message": f"✅ Бэкенд запущен и Firebase инициализирован (DB ID: {DATABASE_ID}).",
         "project_id_from_key": PROJECT_ID,
         "db_check_result": db_status["message"],
         "db_check_details": db_status["details"] if db_status["status"] != "ok" else "DB Check OK. Game should run with 'test_user_for_debug'."
