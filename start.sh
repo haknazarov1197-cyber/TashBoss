@@ -3,7 +3,9 @@
 # Установка переменных окружения для логирования
 set -eo pipefail
 
-echo "Executing start.sh script. Launching Gunicorn via 'python -m gunicorn' to ensure all libraries are found."
+echo "Executing start.sh script. Launching Gunicorn."
 
-# Используем 'python -m gunicorn' для запуска в контексте установленных библиотек
-/usr/bin/env python -m gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:"$PORT"
+# Запускаем Gunicorn, используя прямую команду, что иногда более надежно
+# в контексте виртуального окружения Render.
+# $PORT - это переменная окружения, предоставляемая Render.
+exec gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:"$PORT"
