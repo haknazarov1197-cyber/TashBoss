@@ -1,6 +1,6 @@
 fastapi
-uvicorn[standard]
-gunicorn
 python-telegram-bot
 firebase-admin
-python-dotenv # Добавляем для удобства локального тестирования переменных окружения
+gunicorn
+uvicorn
+pydantic
