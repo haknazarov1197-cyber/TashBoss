@@ -19,11 +19,8 @@ from starlette.staticfiles import StaticFiles
 # Firebase Admin SDK imports
 import firebase_admin
 from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
-# --- ИСПРАВЛЕНО: Удалили некорректный импорт _firestore_helpers ---
-
 # --- Типизация для транзакций: используем firestore.Transaction (с большой буквы 'T') ---
 T = TypeVar('T')
-# ИСПРАВЛЕНИЕ: Класс для транзакции в SDK называется Transaction (с большой буквы 'T')
 FirestoreTransaction = firestore.Transaction 
 
 # --- Configuration and Initialization ---
@@ -182,11 +179,6 @@ def buy_sector_transaction(transaction: FirestoreTransaction, user_id: str, sect
         raise ValueError("Insufficient balance to buy sector.")
 
     # 1. Сначала собираем весь пассивный доход (чтобы избежать потери)
-    # ПРИМЕЧАНИЕ: В Firestore транзакции читают и пишут данные, но не могут 
-    # вызывать другие транзакционные функции. Поэтому мы должны 
-    # вручную выполнить логику сбора дохода внутри этой транзакции, 
-    # чтобы обеспечить атомарность.
-    
     # Расчет доступного дохода и обновление состояния
     state = collect_income_transaction(transaction, user_id)
     
@@ -284,28 +276,29 @@ async def startup_event() -> None:
     if FIREBASE_INITIALIZED:
         return
 
-    FIREBASE_SERVICE_ACCOUNT_KEY = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
+    raw_key = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
     
-    if not FIREBASE_SERVICE_ACCOUNT_KEY:
+    if not raw_key:
         logging.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная FIREBASE_SERVICE_ACCOUNT_KEY не установлена.")
         sys.exit(1)
         
     try:
-        # 1. Добавляем padding для Base64, если Render его удалил
-        def add_padding_if_needed(data: str) -> str:
-            data = data.strip()
-            padding_needed = len(data) % 4
-            if padding_needed != 0:
-                data += '=' * (4 - padding_needed)
-            return data
-            
-        padded_key = add_padding_if_needed(FIREBASE_SERVICE_ACCOUNT_KEY)
+        # --- ИСПРАВЛЕНИЕ: Агрессивная очистка строки от всех пробельных символов ---
+        # 1. Удаляем все пробелы, переносы строк и лишние символы из ключа
+        cleaned_key = "".join(raw_key.split())
 
-        # 2. Декодируем Base64 и загружаем JSON
+        # 2. Добавляем padding для Base64, если необходимо
+        padding_needed = len(cleaned_key) % 4
+        if padding_needed != 0:
+            padded_key = cleaned_key + '=' * (4 - padding_needed)
+        else:
+            padded_key = cleaned_key
+
+        # 3. Декодируем Base64 и загружаем JSON
         decoded_key_bytes = b64decode(padded_key)
         service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
         
-        # 3. Инициализация Firebase
+        # 4. Инициализация Firebase
         cred = credentials.Certificate(service_account_info)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
