@@ -7,25 +7,23 @@ services:
     # Команда, которую Render выполнит для установки зависимостей
     buildCommand: "pip install -r requirements.txt"
     
-    # Команда запуска Gunicorn с Uvicorn Worker, необходимая для асинхронного Starlette/FastAPI
-    startCommand: "gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    # КОНВЕНЦИЯ RENDER: Используем исполняемый файл start.sh для обеспечения
+    # правильного PATH и более надежного запуска приложения.
+    startCommand: "./start.sh"
     
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       
       # 1. СЕКРЕТНЫЙ КЛЮЧ TELEGRAM БОТА
-      # !!! ЗАМЕНИТЕ YOUR_TELEGRAM_BOT_TOKEN НА ВАШ РЕАЛЬНЫЙ ТОКЕН !!!
+      # (Оставлен как есть, проверьте его безопасность!)
       - key: BOT_TOKEN
         value: 8339049510:AAGnMH4djhUXKznvLfd40k6GJ-Q8-AYDMkw
         
       # 2. СЕКРЕТНЫЙ КЛЮЧ СЕРВИСНОГО АККАУНТА FIREBASE
-      # !!! ЗАМЕНИТЕ ЭТО СОДЕРЖИМОЕ НА ВАШ JSON-КЛЮЧ С BASE64-КОДИРОВКОЙ ИЗ FIREBASE !!!
-      # Важно: Используйте блок '|', чтобы избежать проблем с форматированием многострочного JSON.
-      # Убедитесь, что это ключ, закодированный в Base64 (как требует api.py),
-      # или же это просто JSON, но тогда вам нужно будет убрать логику Base64 декодирования в api.py.
-      # Я оставляю Base64, так как это более безопасно для ENV VARS.
-      # Пожалуйста, вставьте сюда ваш Base64-ключ.
+      # !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: ВАМ НУЖНО ЗАМЕНИТЬ ЗНАЧЕНИЕ НА Base64-КОДИРОВАННЫЙ JSON !!!
+      # Ваш Python-код в api.py ожидает Base64-строку для декодирования.
       - key: FIREBASE_SERVICE_ACCOUNT_KEY
-        value: |
-          {"type":"service_account","project_id":"tashboss-1bd35","private_key_id":"2f349db3f8f3fa12774c654e82d7dd4778442008","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDc23fE0wwKJjmj\nTezNClROEnucDKn37fJanOXfR8Sap2Cm3GADVNGNQX0JFYLMD+MHA/sImDc1kvr+\nNAyF7L55XcLcxLG00WDMBYgbKniuGFrgsEmQojiOrcEZErkiTapH9aqmw+XU8Tq8\nTGBAUJ4POYBsmlXycaAwBFeb3qpJBTasucH21mqkv7DuH1Ok0FOEJLdq/DFJfL99\nEW8B/ZlsfCqmJYWpeAnJ5WZWLolGXhJDyI+ky9N7IVrtw6bjNXy8kPWgB9EoF0uU\ntD8osmPiSfTMT1Qtj5zczrxqG0PHx5JpwjHdegv4VLpYGWtneoK7gSLCx8H7/kol\nu8jpP3KlAgMBAAECggEAGYYro02YuJuOUbcxxMiK0bMFIhW8lvCi76HuVw2eRRlO\n7DnPxtLInQCSiLg5s4eqfycQnf+pccGYzEQLpnaj1LbnTEhXGUSRYULKZglUhRo/\ndnQpLFPzIVonVNR7HOHI6iQUIs3FBAUU+qoA/a3TdoL4upRjlm9XSfVWgqcLGwEO\nRoxylUKHWyD9dwxOKEpb5QvvJmb9iA2Lo9RiJxg0afbkdSxjl6t1Ed05XrsPPqYx\nuZnYEoS+Z47wnj+olbzadGnvQvg8t2fVtYhEjVLXIsMkBWnPh/f1TeiSd+wm3JFY\n6of+Y7MamAu8vEjIDoRgWV2ari+ydw9BAfgoTnQ2CQKBgQDx6qOVhYSvqLshngio\nM5Fyq9P0TmGqB4wmMpR9NiI43Huu8Wv9/S2VjppPeC0HlBHGB4qy9lrL0ATWWZCV\ntAU3CIKo6G8oFSA8XqPvy8go8UEEEg5Ky3v065+i+lG7bZXT1GrWTcXDiXypqxet\nYNwgByON0mNRsdF4Zn+b4F+iDwKBgQDptvnPo19/+0M0Y9XeUyV0XhndVDvBfkUb\n2NoqQnt4SMZ36wvXKxKGKyCHBEC2kbvkaLyfWzLf6NohCDDxgB/WzApjzkJYpH0S\naOZCmbUmIl+Tn8K6gHJAp4EnEzjpECpkv1uEiYCPK8Yf894bERT+ZTU5JU9koxQC\nChib8fDECwKBgFjh++6A2wprNS4Z0VZzc/os1bhKYCnHkh+qr9H9ZL99itfxDduI\n/QmZFmsiXXEOXyViOfyc9SkzKcPTroLCXLQmpVMH62dPs8NahmMhfU5FrbygIa4r\na0TGmaWY0RTLI6RrxEEu2/2G802ndhCWqOn/lXmTFji625qgFjygSKLTAoGBALkT\ndvvgyi2VEgEY1jH68fwW0LCelbuCfMOylAFHKHN2XgR0k6nOqBqraFTDH2P0QDB+\naHBhTgZWZPYngGqeJZh5d/jVS2Da0ViUzVMMWZFbQwiqSRBbyx48B2CkLjsR3CBw\nEM8B/FZkOb7v5YDVpCRYjS81xotRQPTkfdxwWVNFAoGANRE8f+QC5TlXBGr8QQS7\nLgCRSN4fzKcbLXGStWqpwiOdgblsmwj2Hju/dN6n63DtGMLf5GcSeHx/PZZdjlqB\nnuk459tIe8V4nJxjiqCTkeTiPItkdlNfQsuE+ZRGY1DHMaPIWEGrkMhfgjBmOZm4\ndBtOWl6HubX+9EPyJ4vDsxQ=\n-----END PRIVATE KEY-----\n","client_email":"firebase-adminsdk-fbsvc@tashboss-1bd35.iam.gserviceaccount.com","client_id":"105642016968404817536","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40tashboss-1bd35.iam.gserviceaccount.com","universe_domain":"googleapis.com"}
+        # Здесь должна быть ОДНА ДЛИННАЯ Base64 строка, без разрывов,
+        # полученная из вашего Firebase JSON-ключа.
+        value: {"type":"service_account","project_id":"tashboss-1bd35","private_key_id":"2f349db3f8f3fa12774c654e82d7dd4778442008","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDc23fE0wwKJjmj\nTezNClROEnucDKn37fJanOXfR8Sap2Cm3GADVNGNQX0JFYLMD+MHA/sImDc1kvr+\nNAyF7L55XcLcxLG00WDMBYgbKniuGFrgsEmQojiOrcEZErkiTapH9aqmw+XU8Tq8\nTGBAUJ4POYBsmlXycaAwBFeb3qpJBTasucH21mqkv7DuH1Ok0FOEJLdq/DFJfL99\nEW8B/ZlsfCqmJYWpeAnJ5WZWLolGXhJDyI+ky9N7IVrtw6bjNXy8kPWgB9EoF0uU\ntD8osmPiSfTMT1Qtj5zczrxqG0PHx5JpwjHdegv4VLpYGWtneoK7gSLCx8H7/kol\nu8jpP3KlAgMBAAECggEAGYYro02YuJuOUbcxxMiK0bMFIhW8lvCi76HuVw2eRRlO\n7DnPxtLInQCSiLg5s4eqfycQnf+pccGYzEQLpnaj1LbnTEhXGUSRYULKZglUhRo/\ndnQpLFPzIVonVNR7HOHI6iQUIs3FBAUU+qoA/a3TdoL4upRjlm9XSfVWgqcLGwEO\nRoxylUKHWyD9dwxOKEpb5QvvJmb9iA2Lo9RiJxg0afbkdSxjl6t1Ed05XrsPPqYx\nuZnYEoS+Z47wnj+olbzadGnvQvg8t2fVtYhEjVLXIsMkBWnPh/f1TeiSd+wm3JFY\n6of+Y7MamAu8vEjIDoRgWV2ari+ydw9BAfgoTnQ2CQKBgQDx6qOVhYSvqLshngio\nM5Fyq9P0TmGqB4wmMpR9NiI43Huu8Wv9/S2VjppPeC0HlBHGB4qy9lrL0ATWWZCV\ntAU3CIKo6G8oFSA8XqPvy8go8UEEEg5Ky3v065+i+lG7bZXT1GrWTcXDiXypqxet\nYNwgByON0mNRsdF4Zn+b4F+iDwKBgQDptvnPo19/+0M0Y9XeUyV0XhndVDvBfkUb\n2NoqQnt4SMZ36wvXKxKGKyCHBEC2kbvkaLyfWzLf6NohCDDxgB/WzApjzkJYpH0S\naOZCmbUmIl+Tn8K6gHJAp4EnEzjpECpkv1uEiYCPK8Yf894bERT+ZTU5JU9koxQC\nChib8fDECwKBgFjh++6A2wprNS4Z0VZzc/os1bhKYCnHkh+qr9H9ZL99itfxDduI\n/QmZFmsiXXEOXyViOfyc9SkzKcPTroLCXLQmpVMH62dPs8NahmMhfU5FrbygIa4r\na0TGmaWY0RTLI6RrxEEu2/2G802ndhCWqOn/lXmTFji625qgFjygSKLTAoGBALkT\ndvvgyi2VEgEY1jH68fwW0LCelbuCfMOylAFHKHN2XgR0k6nOqBqraFTDH2P0QDB+\naHBhTgZWZPYngGqeJZh5d/jVS2Da0ViUzVMMWZFbQwiqSRBbyx48B2CkLjsR3CBw\nEM8B/FZkOb7v5YDVpCRYjS81xotRQPTkfdxwWVNFAoGANRE8f+QC5TlXBGr8QQS7\nLgCRSN4fzKcbLXGStWqpwiOdgblsmwj2Hju/dN6n63DtGMLf5GcSeHx/PZZdjlqB\nnuk459tIe8V4nJxjiqCTkeTiPItkdlNfQsuE+ZRGY1DHMaPIWEGrkMhfgjBmOZm4\ndBtOWl6HubX+9EPyJ4vDsxQ=\n-----END PRIVATE KEY-----\n","client_email":"firebase-adminsdk-fbsvc@tashboss-1bd35.iam.gserviceaccount.com","client_id":"105642016968404817536","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40tashboss-1bd35.iam.gserviceaccount.com","universe_domain":"googleapis.com"}
