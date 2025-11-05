@@ -20,7 +20,8 @@ from starlette.staticfiles import StaticFiles
 # Firebase Dependencies
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app, auth
-from google.cloud.firestore import transaction
+# УДАЛЕНО: from google.cloud.firestore import transaction # -> Это вызывало ошибку ImportError
+from google.cloud.firestore import transaction as firestore_transaction # Используем алиас, чтобы избежать конфликтов, если бы это было нужно, но в основном коде используется декоратор @firestore.transactional
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -40,14 +41,17 @@ SECTORS = {
     'sector3': {'name': 'Сектор C', 'income': 20.0, 'cost': 2500},
 }
 
-# --- УТИЛИТА: ИСПРАВЛЕНИЕ BASE64 PADDING ---
+# --- УТИЛИТА: ИСПРАВЛЕНИЕ BASE64 PADDING (С ДВОЙНОЙ ЗАЩИТОЙ) ---
 
 def add_padding_if_needed(data: str) -> str:
     """
     Обеспечивает правильное заполнение данных Base64 для декодирования.
     Удаляет пробелы и добавляет '='.
     """
-    data = data.strip()
+    # 1. Защита: Удаляем все пробелы, переносы строк и символы возврата каретки
+    data = data.replace(' ', '').replace('\n', '').replace('\r', '') 
+    
+    # 2. Защита: Добавляем необходимое заполнение '='
     padding_needed = len(data) % 4
     if padding_needed != 0:
         data += '=' * (4 - padding_needed)
@@ -136,15 +140,7 @@ async def get_auth_data(request: Request) -> Dict:
     token = auth_header.split(" ")[1]
 
     try:
-        # NOTE: В Mini App token - это query_id, который не является Firebase ID Token.
-        # Для простоты, мы будем использовать query_id как ключ, но это небезопасно
-        # и должно быть исправлено на бэкенде Telegram.
-        # Здесь мы возвращаем token (query_id) как user_id для демонстрации.
-        # В реальном приложении:
-        # decoded_token = auth.verify_id_token(token)
-        # return {"uid": decoded_token["uid"]}
-        
-        # Используем токен как уникальный ID (для Canvas)
+        # Для простоты, используем токен (query_id) как user_id для демонстрации.
         return {"uid": token} 
 
     except Exception as e:
@@ -154,9 +150,7 @@ async def get_auth_data(request: Request) -> Dict:
 
 def get_user_doc_ref(user_id: str) -> firestore.document.DocumentReference:
     """Возвращает ссылку на документ пользователя в Firestore."""
-    # Путь: /artifacts/{appId}/users/{userId}/data/state
-    # Используем userId как имя коллекции и имя документа для простоты.
-    # Фактический путь в Canvas: /artifacts/{appId}/users/{userId}/{your_collection_name}/{documentId}
+    # Путь: /artifacts/{appId}/users/{userId}/tashboss_clicker/{userId}
     return DB_CLIENT.document(f'artifacts/{APP_ID}/users/{user_id}/tashboss_clicker/{user_id}')
 
 
@@ -172,6 +166,10 @@ def calculate_passive_income(sectors: Dict, last_collection_time: datetime) -> f
         SECTORS.get(key, {}).get('income', 0.0) * count 
         for key, count in sectors.items()
     )
+    
+    # Максимальный доход за 24 часа, чтобы избежать огромных чисел при долгом отсутствии
+    max_seconds = 24 * 3600 
+    seconds = min(seconds, max_seconds)
     
     return seconds * total_income_per_second
 
@@ -201,7 +199,7 @@ def load_state_transaction(transaction, user_doc_ref: firestore.document.Documen
         available_income = calculate_passive_income(data.get('sectors', {}), last_collection_time)
         
         # Обновляем состояние для фронтенда (без сохранения в БД)
-        data['available_income'] = available_income
+        data['available_income'] = round(available_income, 2)
         data['total_income_per_second'] = sum(
             SECTORS.get(key, {}).get('income', 0.0) * count 
             for key, count in data.get('sectors', {}).items()
@@ -233,7 +231,9 @@ def collect_income_transaction(transaction, user_doc_ref: firestore.document.Doc
     collected_amount = calculate_passive_income(data.get('sectors', {}), last_collection_time)
     
     if collected_amount > 0:
-        new_balance = data.get('balance', 0.0) + collected_amount
+        # Округляем до 2 знаков для точности
+        collected_amount = round(collected_amount, 2)
+        new_balance = round(data.get('balance', 0.0) + collected_amount, 2)
         new_time = datetime.now()
         
         # Обновляем документ
@@ -287,7 +287,7 @@ def buy_sector_transaction(transaction, user_doc_ref: firestore.document.Documen
     collected_amount = calculate_passive_income(current_sectors, last_collection_time)
     
     # 2. Обновляем баланс
-    new_balance = current_balance + collected_amount - next_cost
+    new_balance = round(current_balance + collected_amount - next_cost, 2)
     new_level = current_level + 1
     
     # 3. Обновляем секторы
@@ -307,7 +307,7 @@ def buy_sector_transaction(transaction, user_doc_ref: firestore.document.Documen
     data['balance'] = new_balance
     data['sectors'] = current_sectors
     data['last_collection_time'] = new_time.isoformat()
-    data['collected_amount'] = collected_amount
+    data['collected_amount'] = round(collected_amount, 2)
     data['available_income'] = 0.0
     return data
 
@@ -407,7 +407,3 @@ app = Starlette(
     middleware=middleware,
     on_startup=[startup_event],
 )
-
-# Добавляем обслуживание статических файлов
-# (это не строго обязательно, так как root_route возвращает HTML, но полезно для app.js)
-app.mount("/", StaticFiles(directory="."), name="static")
