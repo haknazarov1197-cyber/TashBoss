@@ -3,114 +3,396 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss - City Clicker</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Telegram WebApp SDK -->
+    <title>TashBoss Clicker</title>
+    <!-- Официальный SDK Telegram WebApp для надежного получения данных -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body {
             font-family: 'Inter', sans-serif;
-            transition: background-color 0.3s;
-            background-color: #1a1a1a; /* Dark default background */
-            color: #f3f4f6;
+            margin: 0;
+            background: linear-gradient(135deg, #0a1829 0%, #1f2e46 100%);
+            color: #fff;
             min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: flex-start;
             padding-top: 20px;
         }
-        .container-shadow {
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+
+        #app {
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+            text-align: center;
         }
-        .card-shadow {
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+
+        .card {
+            background-color: #1f2e46;
+            border: 1px solid #3a4b62;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.3);
+            margin-bottom: 20px;
         }
-        /* Custom styles for Telegram theme consistency */
-        :root {
-            --tg-theme-bg-color: #1a1a1a;
-            --tg-theme-text-color: #f3f4f6;
-            --tg-theme-link-color: #64b5f6;
-            --tg-theme-button-color: #4CAF50;
-            --tg-theme-button-text-color: #ffffff;
-        }
-        .buy-button {
-             background-color: var(--tg-theme-button-color, #4CAF50);
-             color: var(--tg-theme-button-text-color, #ffffff);
-        }
-        .buy-button:hover:not(:disabled) {
-             background-color: #45a049; /* Darker green on hover */
-        }
-        .disabled\:bg-gray-500:disabled {
-            background-color: #4b5563 !important; /* Lighter dark gray */
-        }
-        .balance-box {
-            background: linear-gradient(135deg, #4f46e5 0%, #a78bfa 100%);
-            animation: gradient-shift 15s ease infinite;
-            background-size: 200% 200%;
-        }
-        @keyframes gradient-shift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-        .collected-message {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            padding: 8px 16px;
-            background-color: rgba(76, 175, 80, 0.9);
+        
+        #clickButton {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            background: linear-gradient(145deg, #1b283d, #253853);
             color: white;
-            border-radius: 10px;
-            font-weight: bold;
-            z-index: 100;
-            transition: opacity 0.3s;
-            pointer-events: none;
+            font-size: 20px; /* Уменьшаем, чтобы поместился текст */
+            font-weight: 900;
+            border: 5px solid #4a90e2;
+            box-shadow: 0 0 20px rgba(74, 144, 226, 0.5);
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            margin: 20px auto;
+            cursor: pointer;
+            user-select: none;
+        }
+        #clickButton:active {
+            transform: scale(0.95);
+            box-shadow: 0 0 10px rgba(74, 144, 226, 0.8);
+        }
+        .tap-text {
+            font-size: 24px;
+            margin-bottom: 2px;
+        }
+        .reward-text {
+            font-size: 14px;
+            font-weight: 400;
+            opacity: 0.8;
+        }
+
+        .balance-display {
+            font-size: 4rem;
+            font-weight: 900;
+            color: #4a90e2;
+            text-shadow: 0 0 10px rgba(74, 144, 226, 0.5);
+        }
+
+        .sector-button {
+            padding: 10px 15px;
+            margin: 5px;
+            border-radius: 8px;
+            font-weight: 700;
+            transition: background-color 0.2s, border 0.2s;
+            flex-grow: 1;
         }
     </style>
 </head>
-<body class="p-4">
+<body>
+    <div id="app">
+        <h1 class="text-3xl font-extrabold text-white mb-6">TashBoss Clicker</h1>
 
-    <div class="w-full max-w-md bg-gray-800 p-5 rounded-3xl container-shadow">
-        <h1 class="text-3xl font-bold text-center text-white mb-6">TashBoss: Город-Кликер</h1>
+        <!-- Статус загрузки / Ошибка -->
+        <div id="statusMessage" class="card text-lg text-yellow-400">Инициализация WebApp...</div>
 
-        <!-- Блок Баланса -->
-        <div class="balance-box p-4 rounded-xl mb-6 text-center text-white">
-            <p class="text-sm opacity-80">Ваш Баланс (BossCoin):</p>
-            <p id="balance-display" class="text-5xl font-extrabold mt-1">0.00</p>
-            <p class="text-xs mt-2 opacity-80">Доход в секунду (BSS/сек): <span id="income-rate-display">0.00</span></p>
-        </div>
-
-        <!-- Блок Сбора Дохода -->
-        <div class="relative bg-gray-700 p-4 rounded-xl mb-6 text-center card-shadow">
-            <h2 class="text-xl font-semibold mb-3">Пассивный Доход</h2>
+        <!-- Основной контент игры -->
+        <div id="gameContent" class="hidden">
+            <!-- Дисплей Баланса -->
+            <div class="card bg-gray-900/50 p-6">
+                <p class="text-gray-400 text-sm">Ваш текущий баланс:</p>
+                <!-- Добавляем ID пользователя для отладки -->
+                <p class="text-xs text-gray-500 mb-2">ID: <span id="userIdDisplay">...</span></p>
+                
+                <div class="balance-display" id="balanceDisplay">0</div>
+                <p class="text-gray-400 text-xs mt-2">Баланс обновляется в реальном времени</p>
+            </div>
             
-            <button id="collect-button" class="w-full py-3 text-lg font-bold rounded-xl transition duration-150 ease-in-out hover:opacity-90">
-                Собрать доход (<span id="collect-amount">0.00</span> BSS)
-            </button>
-            
-            <!-- Сообщение о сборе -->
-            <div id="collected-message" class="collected-message hidden"></div>
-        </div>
+            <!-- Кнопка Клика -->
+            <div id="clickButton" role="button">
+                <span class="tap-text">TAP!</span>
+                <span class="reward-text" id="clickRewardText"></span>
+            </div>
 
-        <!-- Секция Секторов (Магазин) -->
-        <h2 class="text-xl font-semibold text-white mb-4 mt-8">Улучшение Секторов</h2>
-        <div id="sectors-container" class="space-y-4">
-            <!-- Секторы будут рендериться здесь через JS -->
-            <div class="text-center text-gray-400 p-4">Загрузка секторов...</div>
+            <!-- Выбор Сектора -->
+            <div class="card mt-6">
+                <h2 class="text-xl font-bold mb-4">Выбор Сектора Майнинга</h2>
+                <div id="sectorButtons" class="flex justify-center flex-wrap gap-2">
+                    <!-- Кнопки будут добавлены JavaScript -->
+                </div>
+            </div>
         </div>
-
-        <!-- Отладочная информация (скрыта, но полезна) -->
-        <div class="mt-8 text-xs text-gray-500 border-t border-gray-700 pt-4">
-            <p>Статус TG WebApp: <span id="tg-status">Инициализация...</span></p>
-            <p>Статус API: <span id="backend-status">Ожидание...</span></p>
-        </div>
-
     </div>
 
-    <!-- JavaScript логика -->
-    <script type="module" src="./app.js"></script>
+    <!-- Подключение Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Глобальные переменные Firebase и игры
+        let db;
+        let auth;
+        let userId = null;
+        let currentBalance = 0;
+        let currentSectorKey = "sector1";
+        const API_BASE_URL = window.location.origin;
+        
+        // Конфигурация секторов (должна совпадать с бэкендом)
+        const SECTORS_CONFIG = {
+            "sector1": {"name": "Сектор A", "click_value": 1},
+            "sector2": {"name": "Сектор B", "click_value": 5},
+            appId: "tashboss-clicker-app" // ID приложения для пути Firestore
+        };
+
+        const statusMessage = document.getElementById('statusMessage');
+        const gameContent = document.getElementById('gameContent');
+        const balanceDisplay = document.getElementById('balanceDisplay');
+        const clickButton = document.getElementById('clickButton');
+        const clickRewardText = document.getElementById('clickRewardText');
+        const sectorButtonsContainer = document.getElementById('sectorButtons');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+
+        setLogLevel('debug');
+
+
+        /**
+         * 1. Надежно получает ID пользователя Telegram.
+         * Использует window.Telegram.WebApp.initDataUnsafe (самый надежный способ).
+         * @returns {string | null}
+         */
+        function getTelegramUserId() {
+            if (typeof window.Telegram !== 'undefined' && window.Telegram.WebApp.initDataUnsafe.user) {
+                // Это стандартный и надежный способ получения данных в WebApp
+                return window.Telegram.WebApp.initDataUnsafe.user.id.toString();
+            }
+            
+            // Запасной вариант (если SDK не загрузился или запуск не из Telegram)
+            const urlParams = new URLSearchParams(window.location.search);
+            const tgWebAppData = urlParams.get('tgWebAppData');
+            if (tgWebAppData) {
+                try {
+                    const params = new URLSearchParams(tgWebAppData.replace(/&/g, '&'));
+                    const userData = params.get('user');
+                    if (userData) {
+                        const user = JSON.parse(decodeURIComponent(userData));
+                        return user.id.toString();
+                    }
+                } catch (e) {
+                    console.error("Error parsing user data from tgWebAppData (fallback):", e);
+                }
+            }
+            
+            return null;
+        }
+
+        /**
+         * 2. Запрашивает Firebase Custom Token у бэкенда.
+         * @param {string} telegramUserId - ID пользователя Telegram.
+         * @returns {Promise<string | null>} Токен или null в случае ошибки.
+         */
+        async function fetchCustomToken(telegramUserId) {
+            try {
+                statusMessage.textContent = "Получение токена аутентификации (шаг 2/4)...";
+                const response = await fetch(`${API_BASE_URL}/auth-token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_user_id: telegramUserId })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ error: 'Неизвестная ошибка сервера' }));
+                    throw new Error(`Ошибка HTTP: ${response.status}. ${errorData.error}`);
+                }
+                
+                const data = await response.json();
+                return data.token;
+            } catch (error) {
+                console.error("Failed to fetch custom token:", error);
+                statusMessage.textContent = `Ошибка: Не удалось получить токен. ${error.message}`;
+                return null;
+            }
+        }
+
+        /**
+         * 3. Инициализирует Firebase и выполняет вход.
+         */
+        async function initializeAppAndAuth(customToken) {
+            try {
+                statusMessage.textContent = "Инициализация Firebase (шаг 3/4)...";
+                
+                // Используем минимальную конфигурацию, так как нам нужен только auth
+                const firebaseConfig = { projectId: "mock-project-id" };
+                
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                statusMessage.textContent = "Вход в систему (шаг 4/4)...";
+
+                // Вход с помощью Custom Token
+                const userCredential = await signInWithCustomToken(auth, customToken);
+                userId = userCredential.user.uid;
+                
+                console.log(`✅ Успешный вход в Firebase. User ID: ${userId}`);
+
+                setupRealtimeListener();
+                setupUI();
+
+                statusMessage.classList.add('hidden');
+                gameContent.classList.remove('hidden');
+
+                // Показываем ID пользователя для отладки
+                userIdDisplay.textContent = userId;
+
+            } catch (error) {
+                console.error("Firebase initialization or sign-in failed:", error);
+                statusMessage.textContent = `Ошибка: Не удалось войти в Firebase. Проверьте, что FIREBASE_SERVICE_ACCOUNT_KEY настроен правильно. (${error.message})`;
+            }
+        }
+        
+        /**
+         * 4. Настраивает слушатель Firestore для реального времени.
+         */
+        function setupRealtimeListener() {
+            if (!db || !userId) return;
+
+            const docRef = doc(db, `artifacts/${SECTORS_CONFIG.appId}/users/${userId}/data/state`);
+
+            onSnapshot(docRef, (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    const data = docSnapshot.data();
+                    currentBalance = data.balance || 0;
+                    currentSectorKey = data.sector || "sector1";
+                    
+                    balanceDisplay.textContent = new Intl.NumberFormat('ru-RU').format(currentBalance);
+                    updateSectorSelectionUI(currentSectorKey);
+
+                    console.log("Data updated from Firestore:", data);
+                } else {
+                    // Это нормально при первом запуске, бэкенд должен инициализировать
+                    console.log("User document not found. Waiting for backend initialization.");
+                    // Показываем 0, пока данные не появятся
+                    balanceDisplay.textContent = new Intl.NumberFormat('ru-RU').format(0);
+                }
+            }, (error) => {
+                console.error("Firestore real-time listener failed:", error);
+                statusMessage.textContent = `Ошибка Firestore: Потеряно соединение. ${error.message}`;
+                statusMessage.classList.remove('hidden');
+            });
+        }
+        
+        /**
+         * 5. Настраивает UI и обработчики событий.
+         */
+        function setupUI() {
+            clickButton.addEventListener('click', handleUserClick);
+            
+            Object.entries(SECTORS_CONFIG).forEach(([key, config]) => {
+                if (key === 'appId') return; 
+
+                const button = document.createElement('button');
+                button.className = 'sector-button text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 shadow-lg';
+                button.textContent = config.name;
+                button.dataset.sectorKey = key;
+                
+                button.addEventListener('click', () => {
+                    currentSectorKey = key;
+                    updateSectorSelectionUI(key);
+                    // В этой версии смены сектора не отправляется на бэкенд, 
+                    // так как сектор передается только при клике.
+                });
+                
+                sectorButtonsContainer.appendChild(button);
+            });
+            
+            updateSectorSelectionUI(currentSectorKey);
+        }
+
+        function updateSectorSelectionUI(selectedKey) {
+            const buttons = sectorButtonsContainer.querySelectorAll('.sector-button');
+            buttons.forEach(button => {
+                if (button.dataset.sectorKey === selectedKey) {
+                    button.classList.add('bg-green-500', 'hover:bg-green-600', 'active:bg-green-700', 'border-2', 'border-white');
+                    button.classList.remove('bg-indigo-600', 'hover:bg-indigo-700', 'active:bg-indigo-800');
+                } else {
+                    button.classList.add('bg-indigo-600', 'hover:bg-indigo-700', 'active:bg-indigo-800');
+                    button.classList.remove('bg-green-500', 'hover:bg-green-600', 'active:bg-green-700', 'border-2', 'border-white');
+                }
+            });
+            
+            const clickReward = SECTORS_CONFIG[selectedKey]?.click_value || 1;
+            clickRewardText.textContent = `Награда: +${clickReward}`;
+        }
+
+
+        /**
+         * 6. Обрабатывает отправку клика на бэкенд.
+         */
+        async function handleUserClick() {
+            if (!userId || clickButton.disabled) {
+                console.error("Click processing blocked.");
+                return;
+            }
+
+            // Оптимистичное обновление
+            const reward = SECTORS_CONFIG[currentSectorKey].click_value;
+            currentBalance += reward;
+            balanceDisplay.textContent = new Intl.NumberFormat('ru-RU').format(currentBalance);
+            clickButton.disabled = true;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/click`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        sector_key: currentSectorKey
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+                
+                // Firestore listener обновит UI, нам не нужно делать это вручную из ответа.
+
+            } catch (error) {
+                console.error("Click failed, rolling back UI update:", error);
+                // Откатываем оптимистичное обновление
+                currentBalance -= reward;
+                balanceDisplay.textContent = new Intl.NumberFormat('ru-RU').format(currentBalance);
+
+                statusMessage.textContent = `Ошибка: Клик не прошел. ${error.message}`;
+                statusMessage.classList.remove('hidden');
+            } finally {
+                // Задержка для предотвращения спама
+                setTimeout(() => {
+                    clickButton.disabled = false;
+                }, 100);
+            }
+        }
+
+        // --- Главная логика запуска ---
+
+        window.onload = async () => {
+            const telegramUserId = getTelegramUserId();
+            
+            if (!telegramUserId) {
+                statusMessage.textContent = "Ошибка: Приложение не смогло получить ID пользователя Telegram. Запустите бота через Telegram, используя команду /start.";
+                statusMessage.classList.remove('hidden');
+                return;
+            }
+            
+            statusMessage.textContent = "ID пользователя Telegram получен (шаг 1/4).";
+            
+            const customToken = await fetchCustomToken(telegramUserId);
+
+            if (customToken) {
+                await initializeAppAndAuth(customToken);
+            } else {
+                 // Ошибка уже записана в statusMessage
+            }
+        };
+
+    </script>
 </body>
 </html>
