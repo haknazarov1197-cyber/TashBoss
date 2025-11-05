@@ -1,0 +1,18 @@
+# Render Blueprint для развертывания FastAPI
+services:
+  - type: web
+    name: tashboss-api
+    env: python
+    # Команда, которую Render выполнит для установки зависимостей
+    buildCommand: "pip install -r requirements.txt"
+    # Команда, которую Render выполнит для запуска сервера
+    startCommand: "gunicorn api:app --workers 4 --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Добавьте здесь остальные важные переменные окружения, например:
+      # - key: BOT_TOKEN
+      #   value: your_telegram_bot_token
+      # - key: FIREBASE_SERVICE_ACCOUNT_KEY
+      #   value: |
+      #     {"type": "service_account", "project_id": "...", ...}
