@@ -1,7 +1,37 @@
+# Render Blueprint для развертывания веб-сервиса Python (Starlette/Gunicorn)
 services:
   - type: web
-    name: tashboss-bot
+    name: tashboss-clicker-api # Имя вашего сервиса
     env: python
+    
+    # 1. Версия Python (используем ту, что вы указали в runtime.txt)
+    pythonVersion: 3.11.9
+    
+    # 2. Build Command: Установка зависимостей
+    # Эта команда явно запускает pip install.
+    # Этого должно быть достаточно, если Render не использует разные контейнеры.
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python bot.py"
-    plan: free
+    
+    # 3. Start Command: Запуск Gunicorn
+    # Мы используем простой вызов gunicorn. Render обязан добавить 
+    # установленные зависимости в PATH для этого вызова.
+    startCommand: "gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    
+    # 4. Переменные окружения
+    envVars:
+      # Важно: Вы должны добавить сюда ваши секретные переменные, 
+      # которые Render не может угадать.
+      # Если вы уже вводили их через UI Render, то дублировать здесь не нужно.
+      
+      # ПРИМЕРЫ (РАЗБЛОКИРОВАТЬ И ЗАПОЛНИТЬ ПРИ НЕОБХОДИМОСТИ)
+      # - key: BOT_TOKEN
+      #   value: "ВАШ_ТОКЕН_БОТА"
+      # - key: FIREBASE_SERVICE_ACCOUNT_KEY
+      #   value: "ВАШ_BASE64_КЛЮЧ"
+      
+      # Обязательно укажите BASE_URL для корректной работы Telegram Webhook (если используете)
+      # - key: BASE_URL
+      #   value: https://tashboss.onrender.com 
+
+    # Настройки для автоматического развертывания
+    autoDeploy: true
