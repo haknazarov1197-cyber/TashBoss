@@ -48,7 +48,6 @@ BASE_URL = os.getenv("BASE_URL") or "https://tashboss.onrender.com"
 WEB_APP_URL = f"{BASE_URL}" 
 
 # КРИТИЧЕСКИЙ ФИКС: Явно указываем ID базы данных, так как она не "default"
-# На основании скриншотов, ID базы данных - "tashboss"
 DATABASE_ID = "tashboss"
 
 # Переменные для отладки
@@ -64,20 +63,26 @@ def initialize_firebase():
     
     if FIREBASE_KEY_JSON and not firebase_admin._apps:
         try:
-            # АГРЕССИВНАЯ ОЧИСТКА КЛЮЧА
-            # Удаляем символы новой строки, возврата каретки, табуляции и лишние пробелы
-            cleaned_json_string = FIREBASE_KEY_JSON.replace('\n', '').replace('\r', '').replace('\t', '').strip()
-            # Дополнительная очистка, чтобы гарантировать, что это JSON
+            # --- ULTIMATE AGGRESSIVE KEY CLEANING ---
+            cleaned_json_string = FIREBASE_KEY_JSON.strip()
+            cleaned_json_string = cleaned_json_string.replace('\t', '').strip()
             
-            # Попытка парсинга
+            if cleaned_json_string.startswith('"') and cleaned_json_string.endswith('"'):
+                cleaned_json_string = cleaned_json_string[1:-1]
+            if cleaned_json_string.startswith("'") and cleaned_json_string.endswith("'"):
+                cleaned_json_string = cleaned_json_string[1:-1]
+            
+            cleaned_json_string = cleaned_json_string.replace('\\"', '"')
+            
+            # 4. Попытка парсинга
             cred_dict = json.loads(cleaned_json_string)
             PROJECT_ID = cred_dict.get('project_id', 'PROJECT_ID_MISSING_IN_KEY')
             
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
             
-            # --- КРИТИЧЕСКИЙ ФИКС ПРИМЕНЕН: Явное указание ID базы данных ---
-            db = firestore.client(database=DATABASE_ID)
+            # --- КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ #3: ЗАМЕНА 'database' НА 'database_id' ---
+            db = firestore.client(database_id=DATABASE_ID)
             
             FIREBASE_INIT_STATUS = True
             logger.info(f"Firebase Admin SDK успешно инициализирован. Используется DB ID: {DATABASE_ID}")
@@ -86,13 +91,14 @@ def initialize_firebase():
             db = None
             FIREBASE_INIT_STATUS = False
         except Exception as e:
+            # Логируем точную ошибку
             logger.error(f"❌ ОШИБКА: Непредвиденная ошибка инициализации Firebase Admin SDK: {e}")
             db = None
             FIREBASE_INIT_STATUS = False
     elif firebase_admin._apps:
-        # Если приложение уже инициализировано, просто получаем клиента с нужным ID
         try:
-             db = firestore.client(database=DATABASE_ID)
+             # --- КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ #3: ЗАМЕНА 'database' НА 'database_id' ---
+             db = firestore.client(database_id=DATABASE_ID)
              PROJECT_ID = firebase_admin.get_app().project_id if firebase_admin.get_app().project_id else "UNKNOWN_FROM_APP"
              FIREBASE_INIT_STATUS = True
              logger.info(f"Firebase Admin SDK уже инициализирован. Используется DB ID: {DATABASE_ID}")
@@ -461,7 +467,7 @@ async def debug_info():
 @app.get("/health_check")
 def read_root():
     """Простой ответ для проверки работоспособности (health check)."""
-    return {"status": "ok", "message": "TashBoss Clicker API is running (Aggressive Key Cleanup Added)."}
+    return {"status": "ok", "message": "TashBoss Clicker API is running (Firebase client() fix applied)."}
 
 # Обслуживание статических файлов (index.html, app.js, style.css)
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
