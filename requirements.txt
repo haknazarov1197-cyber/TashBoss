@@ -5,3 +5,4 @@ firebase-admin
 google-cloud-firestore
 gunicorn
 python-telegram-bot
+flask
