@@ -1,6 +1,3 @@
-fastapi
-uvicorn[standard]
-pydantic
 firebase-admin
 google-cloud-firestore
 gunicorn
