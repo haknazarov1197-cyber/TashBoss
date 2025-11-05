@@ -64,25 +64,29 @@ def initialize_firebase():
     
     if FIREBASE_KEY_JSON and not firebase_admin._apps:
         try:
-            cleaned_json_string = FIREBASE_KEY_JSON.replace('\n', '').replace('\r', '').strip()
+            # АГРЕССИВНАЯ ОЧИСТКА КЛЮЧА
+            # Удаляем символы новой строки, возврата каретки, табуляции и лишние пробелы
+            cleaned_json_string = FIREBASE_KEY_JSON.replace('\n', '').replace('\r', '').replace('\t', '').strip()
+            # Дополнительная очистка, чтобы гарантировать, что это JSON
+            
+            # Попытка парсинга
             cred_dict = json.loads(cleaned_json_string)
             PROJECT_ID = cred_dict.get('project_id', 'PROJECT_ID_MISSING_IN_KEY')
             
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
             
-            # --- КРИТИЧЕСКИЙ ФИКС ПРИМЕНЕН ЗДЕСЬ ---
-            # Явно указываем ID базы данных при создании клиента
+            # --- КРИТИЧЕСКИЙ ФИКС ПРИМЕНЕН: Явное указание ID базы данных ---
             db = firestore.client(database=DATABASE_ID)
             
             FIREBASE_INIT_STATUS = True
             logger.info(f"Firebase Admin SDK успешно инициализирован. Используется DB ID: {DATABASE_ID}")
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка JSONDecodeError при парсинге ключа Firebase: {e}. Проверьте форматирование ключа.")
+            logger.error(f"❌ ОШИБКА: JSONDecodeError при парсинге ключа Firebase: {e}. Проверьте форматирование ключа.")
             db = None
             FIREBASE_INIT_STATUS = False
         except Exception as e:
-            logger.error(f"Непредвиденная ошибка инициализации Firebase Admin SDK: {e}")
+            logger.error(f"❌ ОШИБКА: Непредвиденная ошибка инициализации Firebase Admin SDK: {e}")
             db = None
             FIREBASE_INIT_STATUS = False
     elif firebase_admin._apps:
@@ -169,6 +173,7 @@ def get_db_ref(user_id: str):
     if not db:
         # Эта ошибка должна срабатывать только если Firebase не инициализирован
         raise HTTPException(status_code=500, detail="Firestore не инициализирован. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY.")
+    # Используем коллекцию "users"
     return db.collection("users").document(user_id) 
 
 async def get_auth_data(request: Request) -> dict:
@@ -235,7 +240,8 @@ def calculate_income(state: UserState) -> tuple[float, datetime]:
             rate = INCOME_RATES[sector]
             income += rate * count * effective_seconds
             
-    return income, now
+    # Доход округляем до 2 знаков после запятой
+    return round(income, 2), now
 
 
 # --- ФУНКЦИЯ ДЛЯ УСТАНОВКИ WEBHOOK ---
@@ -259,6 +265,9 @@ async def set_telegram_webhook():
                  logger.error(f"Непредвиденная ошибка при установке вебхука: {e}")
         else:
             logger.warning("BASE_URL не установлен. Webhook не установлен.")
+
+# Инициализация Telegram Bot Application -- ПЕРЕНЕСЕНО СЮДА
+tg_app = get_telegram_application() 
 
 # --- НАСТРОЙКА WEBHOOK ---
 if tg_app:
@@ -289,25 +298,23 @@ if tg_app:
             logger.error(f"Ошибка обработки вебхука Telegram: {e}")
             return {"status": "error", "message": str(e)}, 200 # Возвращаем 200 для Telegram
 
-# --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ (С ИЗМЕНЕНИЯМИ) ---
+# --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ ---
 @app.post("/api/load_state")
 async def load_state(request: Request):
     """Загружает состояние игры и применяет пассивный доход, используя Firestore."""
     try:
-        # 1. ВРЕМЕННО ОТКЛЮЧАЕМ АУТЕНТИФИКАЦИЮ И ИСПОЛЬЗУЕМ СТАТИЧЕСКИЙ ID
+        # АУТЕНТИФИКАЦИЯ ВРЕМЕННО ОТКЛЮЧЕНА (для отладки)
         # auth_data = await get_auth_data(request)
         # user_id = auth_data.get("uid")
         user_id = "test_user_for_debug"
         # ---------------------------------------------------------------------
 
-        # Теперь load_or_create_state полностью асинхронна и безопасна
         state = await load_or_create_state(user_id) 
         collected_income, current_time = calculate_income(state)
         
         state.balance += collected_income
         state.last_collection_time = current_time.isoformat()
         
-        # Теперь save_state полностью асинхронна и безопасна
         await save_state(user_id, state) 
 
         return {"status": "ok", "state": state.model_dump(), "collected_income": collected_income}
@@ -323,7 +330,7 @@ async def load_state(request: Request):
 async def collect_income(request: Request):
     """Собирает пассивный доход, используя Firestore."""
     try:
-        # ВРЕМЕННО ОТКЛЮЧАЕМ АУТЕНТИФИКАЦИЮ
+        # АУТЕНТИФИКАЦИЯ ВРЕМЕННО ОТКЛЮЧЕНА
         # auth_data = await get_auth_data(request)
         # user_id = auth_data.get("uid")
         user_id = "test_user_for_debug"
@@ -348,7 +355,7 @@ async def collect_income(request: Request):
 async def buy_sector(req: BuySectorRequest, request: Request):
     """Покупает один сектор, используя Firestore."""
     try:
-        # ВРЕМЕННО ОТКЛЮЧАЕМ АУТЕНТИФИКАЦИЮ
+        # АУТЕНТИФИКАЦИЯ ВРЕМЕННО ОТКЛЮЧЕНА
         # auth_data = await get_auth_data(request)
         # user_id = auth_data.get("uid")
         user_id = "test_user_for_debug"
@@ -367,7 +374,7 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         base_cost = SECTOR_COSTS[sector_name]
         cost = base_cost * math.pow(COST_MULTIPLIER, current_count)
 
-        # Округляем до целых чисел (или до 2 знаков после запятой, для точности)
+        # Округляем до 2 знаков после запятой
         cost = round(cost, 2)
         
         if state.balance < cost:
@@ -405,13 +412,12 @@ async def check_database_status():
         # Попробуем сделать легкий запрос, чтобы убедиться, что он работает
         try:
             # Делаем асинхронный вызов к тестовому документу
-            # Используем try/except для обработки ошибки 404
             await asyncio.to_thread(db.collection("health_check").document("status").get)
             
             return {
                 "status": "ok", 
                 "message": f"✅ Firestore (ID: {DATABASE_ID}) инициализирован и отвечает.", 
-                "details": "Проблема, вероятно, в другой части кода (но аутентификация отключена, так что это почти гарантирует запуск)."
+                "details": "DB Check OK."
             }
         except Exception as e:
             return {
@@ -427,11 +433,14 @@ async def debug_info():
     
     # Проверка, была ли инициализация успешной
     if not FIREBASE_INIT_STATUS:
+        # Если произошла ошибка парсинга JSON, мы попадаем сюда
+        db_status = await check_database_status()
         return {
             "status": "critical_error",
             "message": "❌ Инициализация Firebase не удалась.",
             "project_id_from_key": PROJECT_ID,
-            "details": "Ключ JSON не был корректно распарсен. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY."
+            "details": db_status["details"] 
+            # Здесь будет либо ошибка JSONDecodeError, либо что-то другое.
         }
         
     # Если инициализация успешна, пробуем сделать запрос к DB
@@ -442,7 +451,7 @@ async def debug_info():
         "message": f"✅ Бэкенд запущен и Firebase инициализирован (DB ID: {DATABASE_ID}).",
         "project_id_from_key": PROJECT_ID,
         "db_check_result": db_status["message"],
-        "db_check_details": db_status["details"] if db_status["status"] != "ok" else "DB Check OK. Game should run with 'test_user_for_debug'."
+        "db_check_details": db_status["details"]
     }
 # КОНЕЦ НОВОГО ЭНДПОИНТА
     
@@ -452,7 +461,7 @@ async def debug_info():
 @app.get("/health_check")
 def read_root():
     """Простой ответ для проверки работоспособности (health check)."""
-    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Async Firestore and Disabled Auth)."}
+    return {"status": "ok", "message": "TashBoss Clicker API is running (Aggressive Key Cleanup Added)."}
 
 # Обслуживание статических файлов (index.html, app.js, style.css)
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
