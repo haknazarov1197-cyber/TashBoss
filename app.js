@@ -11,6 +11,8 @@ const SECTOR_BASE_COSTS = {
     "sector2": 500.0, 
     "sector3": 2500.0
 };
+// Множитель стоимости для экспоненциального роста. (1.15 - стандарт для кликеров)
+const COST_MULTIPLIER = 1.15;
 
 // --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
 let gameState = {
@@ -85,6 +87,21 @@ async function apiRequest(endpoint, body = null) {
 // --- ОСНОВНАЯ ЛОГИКА ИГРЫ ---
 
 /**
+ * Вычисляет стоимость следующего уровня сектора.
+ * @param {string} sector - Название сектора.
+ * @param {number} currentLevel - Текущий уровень сектора.
+ * @returns {number} Стоимость следующего уровня.
+ */
+function calculateNextCost(sector, currentLevel) {
+    const baseCost = SECTOR_BASE_COSTS[sector];
+    // Расчет следующей стоимости: Базовая стоимость * (Множитель в степени текущего уровня)
+    // Уровень 0: 100 * 1.15^0 = 100
+    // Уровень 1: 100 * 1.15^1 = 115
+    // Уровень 2: 100 * 1.15^2 = 132.25
+    return baseCost * Math.pow(COST_MULTIPLIER, currentLevel);
+}
+
+/**
  * Обновляет отображение баланса и сектора.
  */
 function renderState() {
@@ -96,8 +113,9 @@ function renderState() {
     // 2. Обновление секций покупки и расчет общей ставки дохода
     for (const sector in gameState.sectors) {
         const level = gameState.sectors[sector];
-        const baseCost = SECTOR_BASE_COSTS[sector];
-        const currentCost = baseCost * (level + 1);
+        
+        // --- ИЗМЕНЕНИЕ: Использование новой функции для расчета стоимости ---
+        const currentCost = calculateNextCost(sector, level);
         const incomeRate = SECTOR_RATES[sector];
 
         // Обновление UI уровня и стоимости
@@ -107,6 +125,8 @@ function renderState() {
         // Обновление кнопки покупки
         const buyButton = document.querySelector(`.buy-button[data-sector="${sector}"]`);
         if (buyButton) {
+            // Обновление атрибута data-cost для использования в API (для удобства, хотя API должен считать сам)
+            buyButton.setAttribute('data-cost', currentCost.toFixed(2));
             buyButton.disabled = gameState.balance < currentCost;
         }
 
@@ -189,6 +209,7 @@ async function handleCollectIncome() {
                 document.getElementById('collected-info').classList.add('hidden');
             }, 3000);
         } else {
+            // Внимание: это сообщение может сработать, если доход был, но меньше 0.01.
             showModal("Успешно", "Доход был собран, но за это время не было накоплений.");
         }
 
@@ -211,6 +232,9 @@ async function handleBuySector(sector) {
     button.textContent = 'Покупка...';
 
     try {
+        // --- ИЗМЕНЕНИЕ: Расчет ожидаемой стоимости для отображения в модальном окне ---
+        const expectedCost = calculateNextCost(sector, gameState.sectors[sector]).toFixed(2);
+
         const data = await apiRequest('/buy_sector', { sector: sector });
 
         gameState = {
@@ -220,7 +244,8 @@ async function handleBuySector(sector) {
         };
         
         renderState();
-        showModal("Успех", `Вы успешно купили ${sector}!`);
+        // Модальное окно теперь показывает, сколько было потрачено
+        showModal("Успех", `Вы успешно купили ${sector} за ${expectedCost} BSS!`);
 
     } catch (error) {
         // Ошибка уже показана (например, недостаток средств)
