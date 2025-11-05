@@ -10,353 +10,347 @@ from typing import Dict, Any, Tuple
 # FastAPI/Starlette imports
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, FileResponse
-from starlette.routing import Route
+from starlette.routing import Route, Mount
 from starlette.requests import Request
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-
-# Telegram Bot imports
-try:
-    import telegram
-    from telegram import WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
-except ImportError:
-    logging.critical("❌ CRITICAL ERROR: Library 'python-telegram-bot' not found. Please install it.")
-    sys.exit(1)
+from starlette.staticfiles import StaticFiles
 
 # Firebase Admin SDK imports
-try:
-    import firebase_admin
-    from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
-    from firebase_admin._firestore_helpers import transactional
-except ImportError:
-    # Этот блок будет пропущен после установки requirements.txt
-    logging.critical("❌ CRITICAL ERROR: Library 'firebase-admin' not found. Please install it.")
-    sys.exit(1)
-
-import httpx
+# --- ВАЖНО: УДАЛЕН БЛОК try/except, чтобы получить нативную трассировку ошибки ImportError ---
+import firebase_admin
+from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
+from firebase_admin._firestore_helpers import transactional
+# ------------------------------------------------------------------------
 
 # --- Configuration and Initialization ---
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO,
+logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("api")
 
 # Глобальные переменные
 db: firestore.client = None
-firebase_auth: auth = None
-telegram_bot: telegram.Bot = None
 APP_ID = "tashboss-clicker-app" # Идентификатор приложения для пути Firestore
 FIREBASE_INITIALIZED = False
 
-# Получение переменных окружения
-BASE_URL = os.environ.get("BASE_URL")
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
 # Логика игры
-# Конфигурация секторов (должна совпадать с фронтендом)
 SECTORS_CONFIG = {
-    "sector1": {"name": "Сектор A", "click_value": 1, "multiplier": 1.0},
-    "sector2": {"name": "Сектор B", "click_value": 5, "multiplier": 1.5},
+    'sector1': {'name': 'Зона отдыха', 'income': 0.5, 'cost': 100},
+    'sector2': {'name': 'Бизнес-центр', 'income': 2.0, 'cost': 500},
+    'sector3': {'name': 'Индустриальная зона', 'income': 10.0, 'cost': 2500},
 }
 
-# --- Firebase Functions ---
+# --- MIDDLEWARE ---
+middleware = [
+    Middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Разрешаем все для Telegram WebApp
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+]
 
-def initialize_firebase():
-    """Инициализирует Firebase Admin SDK."""
-    global db, firebase_auth, FIREBASE_INITIALIZED
+# --- FIREBASE AUTH UTILS ---
+
+async def get_auth_data(request: Request) -> Tuple[str, Dict[str, Any]]:
+    """Проверяет токен из заголовка Authorization и возвращает UID пользователя и декодированные данные."""
     
+    # 1. Извлечение токена
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise firebase_exceptions.InvalidArgumentError("Authorization header missing or invalid.")
+    
+    token = auth_header.split(" ")[1]
+
+    # 2. Проверка токена
+    try:
+        # В контексте Telegram WebApp, query_id передается как токен. 
+        # Мы используем его как заглушку, пока не реализуем полноценную проверку,
+        # если API Telegram не предоставляет готовый ID Token.
+        # В реальном приложении здесь должна быть верификация через Admin SDK.
+        
+        # Для простоты прототипа:
+        # Поскольку бэкенд не может напрямую проверить Telegram WebApp token (query_id), 
+        # мы извлекаем user_id из токена. В этом прототипе мы просто используем 
+        # заголовок Authorization для передачи user_id/query_id. 
+        # Это не является безопасным.
+        
+        # В данном случае, поскольку мы используем Firebase Custom Auth 
+        # (как в более ранних версиях), токен должен быть Firebase ID Token.
+        # Однако, frontend использует query_id. 
+        
+        # ВРЕМЕННОЕ РЕШЕНИЕ: Просто используем токен (который является query_id) как ID. 
+        # В боевом режиме это должен быть Firebase ID Token.
+        # user_id = auth.verify_id_token(token)['uid'] # ПРАВИЛЬНЫЙ СПОСОБ
+        
+        # Используем Telegram ID (который приходит в query_id) как ID пользователя.
+        # Это небезопасно, но позволяет работать прототипу.
+        user_id = token 
+        
+        return user_id, {"uid": user_id}
+
+    except firebase_exceptions.InvalidIdTokenError:
+        raise firebase_exceptions.InvalidIdTokenError("Invalid or expired authentication token.")
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        raise firebase_exceptions.InvalidArgumentError(f"Authentication failed: {e}")
+
+# --- FIREBASE UTILITES ---
+
+def get_user_doc_ref(user_id: str) -> firestore.DocumentReference:
+    """Возвращает ссылку на документ пользователя в Firestore."""
+    # Путь: /artifacts/{appId}/users/{userId}/data/state
+    return db.document(f"artifacts/{APP_ID}/users/{user_id}/data/state")
+
+@transactional
+def load_or_init_state_transaction(transaction: firestore.transaction, user_id: str) -> Dict[str, Any]:
+    """Загружает или инициализирует состояние игры в транзакции."""
+    doc_ref = get_user_doc_ref(user_id)
+    doc_snapshot = doc_ref.get(transaction=transaction)
+    
+    if doc_snapshot.exists:
+        state = doc_snapshot.to_dict()
+    else:
+        # Начальная инициализация
+        state = {
+            'balance': 100.0,
+            'sectors': {'sector1': 0, 'sector2': 0, 'sector3': 0},
+            'last_collection_time': datetime.now(timezone.utc).isoformat(),
+            'total_income_per_second': 0.0,
+            'available_income': 0.0,
+        }
+        transaction.set(doc_ref, state)
+    
+    # Расчет доступного пассивного дохода
+    state = calculate_passive_income(state)
+    
+    return state
+
+def calculate_passive_income(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Рассчитывает доступный пассивный доход, но не собирает его."""
+    last_time_str = state.get('last_collection_time')
+    if not last_time_str:
+        return {**state, 'available_income': 0.0}
+
+    last_time = datetime.fromisoformat(last_time_str.replace('Z', '+00:00'))
+    time_elapsed_seconds = (datetime.now(timezone.utc) - last_time).total_seconds()
+    
+    # Расчет общего дохода в секунду
+    total_income = sum(
+        SECTORS_CONFIG[key]['income'] * state['sectors'].get(key, 0)
+        for key in state['sectors']
+    )
+    
+    available_income = max(0.0, time_elapsed_seconds * total_income)
+    
+    state['total_income_per_second'] = total_income
+    state['available_income'] = available_income
+    
+    return state
+
+
+@transactional
+def collect_income_transaction(transaction: firestore.transaction, user_id: str) -> Dict[str, Any]:
+    """Собирает пассивный доход и обновляет баланс."""
+    doc_ref = get_user_doc_ref(user_id)
+    doc_snapshot = doc_ref.get(transaction=transaction)
+    
+    if not doc_snapshot.exists:
+        raise ValueError("Game state not initialized.")
+
+    state = doc_snapshot.to_dict()
+    
+    # Расчет доступного дохода
+    state_with_income = calculate_passive_income(state)
+    collected_amount = state_with_income['available_income']
+    
+    # Обновление состояния
+    state['balance'] = state['balance'] + collected_amount
+    state['last_collection_time'] = datetime.now(timezone.utc).isoformat()
+    
+    transaction.set(doc_ref, state)
+    
+    # Возвращаем обновленное состояние и собранную сумму
+    state['collected_amount'] = collected_amount
+    state = calculate_passive_income(state) # Обновляем расчеты после сбора
+    
+    return state
+
+
+@transactional
+def buy_sector_transaction(transaction: firestore.transaction, user_id: str, sector_id: str) -> Dict[str, Any]:
+    """Покупает один уровень сектора."""
+    if sector_id not in SECTORS_CONFIG:
+        raise ValueError("Invalid sector ID.")
+
+    doc_ref = get_user_doc_ref(user_id)
+    doc_snapshot = doc_ref.get(transaction=transaction)
+
+    if not doc_snapshot.exists:
+        raise ValueError("Game state not initialized.")
+        
+    state = doc_snapshot.to_dict()
+    sector_count = state['sectors'].get(sector_id, 0)
+    
+    config = SECTORS_CONFIG[sector_id]
+    cost = config['cost'] * (sector_count + 1) # Стоимость растет линейно
+
+    if state['balance'] < cost:
+        raise ValueError("Insufficient balance to buy sector.")
+
+    # Сначала собираем весь пассивный доход (чтобы избежать потери)
+    state_after_collection = collect_income_transaction(transaction, user_id)
+    
+    # Проверяем баланс после сбора (повторно, хотя транзакция уже должна была проверить)
+    if state_after_collection['balance'] < cost:
+         raise ValueError("Insufficient balance after collecting income.")
+
+    # Обновляем состояние покупки
+    state_after_collection['balance'] -= cost
+    state_after_collection['sectors'][sector_id] = sector_count + 1
+    
+    transaction.set(doc_ref, state_after_collection)
+    
+    # Возвращаем обновленное состояние (с новым балансом и секторами)
+    return calculate_passive_income(state_after_collection)
+
+
+# --- API ENDPOINTS ---
+
+async def load_state_endpoint(request: Request) -> JSONResponse:
+    """Загружает текущее состояние игры или инициализирует его."""
+    try:
+        user_id, _ = await get_auth_data(request)
+        
+        # Используем транзакцию для надежной загрузки/инициализации
+        state = db.transaction(lambda t: load_or_init_state_transaction(t, user_id))
+        
+        return JSONResponse(state)
+    except firebase_exceptions.InvalidArgumentError as e:
+        return JSONResponse({"detail": str(e)}, status_code=401)
+    except Exception as e:
+        logger.error(f"Error loading state: {e}")
+        return JSONResponse({"detail": "Server error while loading game state."}, status_code=500)
+
+async def collect_income_endpoint(request: Request) -> JSONResponse:
+    """Собирает накопленный пассивный доход."""
+    try:
+        user_id, _ = await get_auth_data(request)
+
+        # Используем транзакцию для сбора дохода
+        state = db.transaction(lambda t: collect_income_transaction(t, user_id))
+
+        return JSONResponse(state)
+    except firebase_exceptions.InvalidArgumentError as e:
+        return JSONResponse({"detail": str(e)}, status_code=401)
+    except Exception as e:
+        logger.error(f"Error collecting income: {e}")
+        return JSONResponse({"detail": "Server error while collecting income."}, status_code=500)
+
+
+async def buy_sector_endpoint(request: Request) -> JSONResponse:
+    """Покупает сектор."""
+    try:
+        user_id, _ = await get_auth_data(request)
+        data = await request.json()
+        sector_id = data.get("sector_id")
+
+        if not sector_id:
+            return JSONResponse({"detail": "Missing sector_id."}, status_code=400)
+
+        # Используем транзакцию для покупки
+        state = db.transaction(lambda t: buy_sector_transaction(t, user_id, sector_id))
+
+        return JSONResponse(state)
+    except ValueError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400) # Недостаточно баланса
+    except firebase_exceptions.InvalidArgumentError as e:
+        return JSONResponse({"detail": str(e)}, status_code=401)
+    except Exception as e:
+        logger.error(f"Error buying sector: {e}")
+        return JSONResponse({"detail": "Server error while buying sector."}, status_code=500)
+
+
+# --- STATIC FILES AND HTML ROUTES ---
+
+# Настройка для обслуживания статических файлов (index.html, app.js)
+static_files = StaticFiles(directory=".")
+
+async def homepage(request: Request) -> FileResponse:
+    """Обслуживает index.html для корневого пути."""
+    return FileResponse("index.html")
+
+async def webapp_route(request: Request) -> FileResponse:
+    """Обслуживает index.html для пути /webapp."""
+    return FileResponse("index.html")
+
+
+# --- STARTUP AND SHUTDOWN ---
+
+async def startup_event() -> None:
+    """Инициализирует Firebase Admin SDK при запуске приложения."""
+    global db, FIREBASE_INITIALIZED
+
     if FIREBASE_INITIALIZED:
         return
 
-    # Предполагаем, что ключ Firebase находится в переменной окружения FIREBASE_SERVICE_ACCOUNT_KEY
-    # либо в B64-кодированном, либо в чистом JSON-формате.
-    key_b64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY_B64")
-    key_raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
-    service_account_info = None
-
-    if key_b64:
-        try:
-            service_account_json = b64decode(key_b64).decode('utf-8')
-            service_account_info = json.loads(service_account_json)
-        except (BinasciiError, json.JSONDecodeError, UnicodeDecodeError):
-            logger.warning("Failed to decode Firebase key from B64. Trying raw JSON.")
-            pass
+    FIREBASE_SERVICE_ACCOUNT_KEY = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
     
-    if not service_account_info and key_raw:
-        try:
-            service_account_info = json.loads(key_raw)
-        except json.JSONDecodeError:
-            logger.error("Failed to parse Firebase key from raw JSON. Check environment variable.")
-            
-    if not service_account_info:
-         logger.critical("❌ Firebase service account key not found in env variables or invalid.")
-         return
-
+    if not FIREBASE_SERVICE_ACCOUNT_KEY:
+        logging.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная FIREBASE_SERVICE_ACCOUNT_KEY не установлена.")
+        sys.exit(1)
+        
     try:
+        # 1. Добавляем padding для Base64, если Render его удалил
+        def add_padding_if_needed(data: str) -> str:
+            data = data.strip()
+            padding_needed = len(data) % 4
+            if padding_needed != 0:
+                data += '=' * (4 - padding_needed)
+            return data
+            
+        padded_key = add_padding_if_needed(FIREBASE_SERVICE_ACCOUNT_KEY)
+
+        # 2. Декодируем Base64 и загружаем JSON
+        decoded_key_bytes = b64decode(padded_key)
+        service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
+        
+        # 3. Инициализация Firebase
         cred = credentials.Certificate(service_account_info)
-        # Инициализация с уникальным именем приложения
-        firebase_admin.initialize_app(cred, name=APP_ID)
+        firebase_admin.initialize_app(cred)
         db = firestore.client()
-        firebase_auth = auth
         FIREBASE_INITIALIZED = True
-        logger.info("✅ Firebase successfully initialized.")
+        
+        logging.info("✅ Firebase Admin SDK успешно инициализирован.")
+        
+    except BinasciiError as e:
+        logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка декодирования Base64: {e}. Проверьте, что ключ в переменной FIREBASE_SERVICE_ACCOUNT_KEY является корректным Base64.")
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"❌ Error initializing Firebase Admin SDK: {e}")
+        logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Непредвиденная ошибка при инициализации Firebase: {e}")
+        sys.exit(1)
 
-def get_user_doc_ref(user_id: str) -> firestore.document.DocumentReference:
-    """Возвращает ссылку на документ пользователя в приватной коллекции."""
-    # Путь: /artifacts/{appId}/users/{userId}/data/state
-    return db.collection("artifacts").document(APP_ID).collection("users").document(user_id).collection("data").document("state")
+# --- ROUTES ---
 
-# --- Authentication/Claim Functions ---
-
-async def create_custom_token(user_id: str) -> Tuple[str | None, str | None]:
-    """Создает Firebase Custom Token для аутентификации пользователя."""
-    if not FIREBASE_INITIALIZED:
-        return None, "Firebase is not initialized."
-
-    try:
-        # Создаем пользователя, если он не существует
-        try:
-            firebase_auth.get_user(user_id)
-        except firebase_exceptions.NotFoundError:
-            firebase_auth.create_user(uid=user_id)
-
-        # Создаем Custom Token
-        custom_token = firebase_auth.create_custom_token(user_id)
-        return custom_token.decode('utf-8'), None
-    except Exception as e:
-        logger.error(f"Error creating custom token for user {user_id}: {e}")
-        return None, str(e)
-
-
-async def auth_token_handler(request: Request) -> JSONResponse:
-    """Обрабатывает запрос на получение Custom Token для WebApp."""
-    try:
-        data = await request.json()
-        telegram_user_id = data.get("telegram_user_id")
-
-        if not telegram_user_id:
-            return JSONResponse({"error": "Missing telegram_user_id"}, status_code=400)
-
-        # Важно: Firebase User ID должен быть строкой.
-        custom_token, error = await create_custom_token(str(telegram_user_id))
-
-        if error:
-            return JSONResponse({"error": f"Failed to create token: {error}"}, status_code=500)
-
-        return JSONResponse({
-            "token": custom_token,
-        })
-
-    except Exception as e:
-        logger.error(f"Unhandled error in auth_token_handler: {e}")
-        return JSONResponse({"error": "Internal Server Error"}, status_code=500)
-
-# --- Game Logic Functions (Click/Upgrade) ---
-
-def get_base_data(user_id: str) -> Dict[str, Any]:
-    """Получает или инициализирует данные пользователя, возвращая базовые значения при ошибке."""
-    if not db:
-        return {"balance": 0, "sector": "sector1", "clicks": 0, "last_active": datetime.now(timezone.utc).isoformat(), "auto_mining_rate": 0}
-        
-    doc_ref = get_user_doc_ref(user_id)
-    
-    try:
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
-            return {
-                "balance": data.get("balance", 0),
-                "sector": data.get("sector", "sector1"),
-                "clicks": data.get("clicks", 0),
-                "last_active": data.get("last_active", datetime.now(timezone.utc).isoformat()),
-                "auto_mining_rate": data.get("auto_mining_rate", 0),
-            }
-        else:
-            initial_data = {
-                "balance": 100, 
-                "sector": "sector1",
-                "clicks": 0,
-                "last_active": datetime.now(timezone.utc).isoformat(),
-                "auto_mining_rate": 0,
-            }
-            # Устанавливаем начальные данные (вне транзакции)
-            doc_ref.set(initial_data, merge=True) 
-            return initial_data
-    except Exception as e:
-        logger.error(f"Error fetching/initializing user data for {user_id}: {e}")
-        return {"balance": 0, "sector": "sector1", "clicks": 0, "last_active": datetime.now(timezone.utc).isoformat(), "auto_mining_rate": 0}
-
-@firestore.transactional
-def update_user_data_transaction(transaction: firestore.transaction, user_id: str, sector_key: str) -> Tuple[bool, int]:
-    """Транзакционно обрабатывает клик."""
-    doc_ref = get_user_doc_ref(user_id)
-    
-    try:
-        snapshot = doc_ref.get(transaction=transaction)
-        
-        data = snapshot.to_dict() or {}
-
-        # Инициализация данных, если документ не существует в этой транзакции
-        if not snapshot.exists:
-            data = {
-                "balance": 100, 
-                "sector": "sector1",
-                "clicks": 0,
-                "last_active": datetime.now(timezone.utc).isoformat(),
-                "auto_mining_rate": 0,
-            }
-            transaction.set(doc_ref, data) # Устанавливаем начальные данные
-        
-        current_balance = data.get("balance", 0)
-        current_clicks = data.get("clicks", 0)
-        
-        sector_info = SECTORS_CONFIG.get(sector_key, SECTORS_CONFIG["sector1"])
-        click_reward = sector_info["click_value"]
-        
-        new_balance = current_balance + click_reward
-        
-        transaction.update(doc_ref, {
-            "balance": new_balance,
-            "clicks": current_clicks + 1,
-            "last_active": datetime.now(timezone.utc).isoformat(),
-        })
-        
-        return True, new_balance
-
-    except Exception as e:
-        logger.error(f"Transaction failed for user {user_id}: {e}")
-        # Возвращаем False и текущий баланс
-        current_data = get_base_data(user_id)
-        return False, current_data.get("balance", 0)
-
-
-async def click_handler(request: Request) -> JSONResponse:
-    """Обрабатывает клик пользователя (увеличение баланса)."""
-    if not db:
-        return JSONResponse({"error": "Database not initialized"}, status_code=500)
-
-    try:
-        data = await request.json()
-        user_id = data.get("user_id")
-        sector_key = data.get("sector_key", "sector1")
-        
-        if not user_id:
-            return JSONResponse({"error": "Missing user_id"}, status_code=400)
-        
-        # Запускаем транзакцию
-        transaction = db.transaction()
-        success, new_balance = update_user_data_transaction(transaction, user_id, sector_key)
-
-        if success:
-            return JSONResponse({"status": "ok", "new_balance": new_balance})
-        else:
-            return JSONResponse({"error": "Transaction failed"}, status_code=500)
-
-    except Exception as e:
-        logger.error(f"Unhandled error in click_handler: {e}")
-        return JSONResponse({"error": "Internal Server Error"}, status_code=500)
-
-# --- Telegram Bot Handlers ---
-
-async def handle_telegram_update(request: Request) -> JSONResponse:
-    """Обрабатывает входящие обновления от Telegram (WebHook)."""
-    if not telegram_bot:
-        logger.error("Telegram bot is not initialized.")
-        return JSONResponse({"error": "Telegram bot not ready"}, status_code=500)
-    
-    try:
-        update_json = await request.json()
-        
-        if 'message' in update_json:
-            message = update_json['message']
-            chat_id = message['chat']['id']
-            text = message.get('text', '').strip()
-            
-            # Обрабатываем команду /start
-            if text == "/start":
-                # URL для WebApp
-                webapp_url = f"{BASE_URL.rstrip('/')}/" 
-
-                # Создаем кнопку WebApp
-                keyboard = [
-                    [KeyboardButton(
-                        "🚀 Запустить TashBoss Clicker",
-                        web_app=WebAppInfo(url=webapp_url)
-                    )]
-                ]
-                reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
-                await telegram_bot.send_message(
-                    chat_id=chat_id,
-                    text="Привет! Нажми кнопку ниже, чтобы начать майнинг.",
-                    reply_markup=reply_markup
-                )
-                logger.info(f"Sent /start response to chat_id: {chat_id}")
-                return JSONResponse({"status": "ok"})
-                
-        
-        return JSONResponse({"status": "ok"})
-    
-    except Exception as e:
-        logger.error(f"Error processing Telegram update: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-# --- Initialization & Starlette App Setup ---
-
-async def startup_event():
-    """Событие, срабатывающее при запуске сервера."""
-    logger.info("⚡️ Starting up and attempting to initialize Firebase and Telegram...")
-    
-    initialize_firebase()
-
-    global telegram_bot
-    
-    if BOT_TOKEN and BASE_URL:
-        try:
-            telegram_bot = telegram.Bot(BOT_TOKEN)
-            
-            # 3. Установка Webhook
-            webhook_url = f"{BASE_URL.rstrip('/')}/telegram-webhook"
-            
-            # Используем httpx для асинхронной установки вебхука
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
-                    json={"url": webhook_url},
-                    timeout=10
-                )
-
-                if response.status_code == 200 and response.json().get("ok"):
-                    logger.info(f"✅ Telegram Webhook set to: {webhook_url}")
-                else:
-                    error_message = response.json().get("description", "Unknown error")
-                    logger.error(f"❌ ERROR setting Telegram Webhook: {error_message}. Full response: {response.text}")
-                    
-        except Exception as e:
-            logger.error(f"❌ ERROR during Telegram bot initialization or webhook setup: {e}")
-    else:
-        logger.error("❌ BOT_TOKEN or BASE_URL not found. Telegram bot disabled.")
-
-    
 routes = [
-    # Маршрут для отдачи HTML-файла
-    Route("/", endpoint=lambda r: FileResponse("index.html", media_type="text/html"), methods=["GET"]),
+    # Static files mount must come before other routes to handle app.js
+    Mount("/", app=static_files, name="static"), 
     
-    Route("/auth-token", endpoint=auth_token_handler, methods=["POST"]),
-    Route("/click", endpoint=click_handler, methods=["POST"]),
-    Route("/telegram-webhook", endpoint=handle_telegram_update, methods=["POST"]),
+    # API endpoints
+    Route("/api/load_state", endpoint=load_state_endpoint, methods=["POST"]),
+    Route("/api/collect_income", endpoint=collect_income_endpoint, methods=["POST"]),
+    Route("/api/buy_sector", endpoint=buy_sector_endpoint, methods=["POST"]),
+    
+    # Serve index.html
+    Route("/", endpoint=homepage),
+    Route("/webapp", endpoint=webapp_route),
 ]
 
-middleware = [
-    Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-]
-
-# Важно: имя Starlette app должно быть 'app', чтобы соответствовать gunicorn api:app
+# Создание Starlette приложения
 app = Starlette(
-    routes=routes, 
-    middleware=middleware, 
+    routes=routes,
+    middleware=middleware,
     on_startup=[startup_event]
 )
