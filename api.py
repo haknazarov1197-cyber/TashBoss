@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, HTMLResponse
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.staticfiles import StaticFiles
+# from starlette.staticfiles import StaticFiles # Больше не нужен для app.js
 
 from firebase_admin import credentials, initialize_app, firestore, auth
 from google.cloud.firestore import transactional, Client as FirestoreClient
@@ -373,6 +373,16 @@ async def homepage(request):
         return HTMLResponse(content)
     except FileNotFoundError:
         return PlainTextResponse("index.html не найден.", status_code=500)
+        
+async def app_js_endpoint(request: Request):
+    """Обслуживает файл app.js, чтобы избежать ошибки импорта в StaticFiles."""
+    try:
+        with open("app.js", "r", encoding="utf-8") as f:
+            content = f.read()
+        # Важно: устанавливаем правильный MIME-тип
+        return PlainTextResponse(content, media_type="application/javascript")
+    except FileNotFoundError:
+        return PlainTextResponse("app.js не найден.", status_code=404)
 
 
 # Маршруты для API
@@ -384,8 +394,8 @@ api_routes = [
 
 # Маршруты для всего приложения (включая статику и основную страницу)
 routes = [
-    # Обслуживание статических файлов (app.js)
-    Mount("/app.js", StaticFiles(directory=".", packages=['.'], html=False)),
+    # --- ИСПРАВЛЕНИЕ: Обслуживаем app.js через отдельный обработчик (ВМЕСТО StaticFiles) ---
+    Route("/app.js", app_js_endpoint, methods=["GET"]),
     
     # Главная страница и страница WebApp
     Route("/", homepage, methods=["GET"]),
