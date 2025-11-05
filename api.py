@@ -5,7 +5,6 @@ import json
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from datetime import datetime, timezone
-# Изменение: импортируем Any для безопасной подсказки типов
 from typing import Dict, Any, Tuple 
 
 # FastAPI/Starlette imports
@@ -18,10 +17,10 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
 # --- Firebase Admin SDK imports ---
+# КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Удалили импорт _firestore_helpers
 try:
     import firebase_admin
-    from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
-    from firebase_admin._firestore_helpers import transactional
+    from firebase_admin import credentials, firestore, auth, exceptions
     from telegram import Update 
 except ImportError as e:
     # Заглушки: Если импорт провалился, переменные становятся None
@@ -29,8 +28,7 @@ except ImportError as e:
     credentials = None
     firestore = None
     auth = None
-    firebase_exceptions = None
-    transactional = lambda f: f # Заглушка для декоратора, чтобы не сломать синтаксис
+    exceptions = None
     Update = None
     logging.critical(f"❌ CRITICAL WARNING: Firebase/Telegram libraries not imported at module level: {e}. Checking again in startup_event.")
 
@@ -45,7 +43,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("api")
 
 # Глобальные переменные
-# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Используем Any вместо firestore.client, чтобы избежать AttributeError
+# Используем Any для безопасной подсказки типов
 db: Any = None 
 APP_ID = "tashboss-clicker-app" 
 FIREBASE_INITIALIZED = False
@@ -63,7 +61,6 @@ SECTORS_CONFIG = {
 def add_padding_if_needed(data: str) -> str:
     """
     Ensures Base64 data is correctly padded for decoding.
-    Environment variables often strip the necessary trailing '=' characters.
     """
     data = data.strip()
     padding_needed = len(data) % 4
@@ -95,7 +92,7 @@ async def get_auth_data(request: Request) -> str:
         decoded_token = auth.verify_id_token(id_token)
         uid = decoded_token['uid']
         return uid
-    except firebase_exceptions.AuthError as e:
+    except exceptions.AuthError as e:
         logger.error(f"Firebase Auth Error: {e}. Token: {id_token[:10]}...")
         if len(id_token) > 20 and all(c.isalnum() or c in '_-' for c in id_token):
              logger.warning("Using WebApp Query ID as fallback UID.")
@@ -155,44 +152,11 @@ def calculate_passive_income(state: Dict[str, Any]) -> Tuple[float, datetime]:
     return max(0.0, income), new_last_time
 
 
-# --- API Endpoints Handlers ---
+# --- API Endpoints Helpers (Transaction Logic) ---
 
-async def handle_api_request(request: Request, endpoint_handler):
-    """Общий обработчик для аутентификации и обработки исключений API."""
-    # ПРОВЕРКА ДОСТУПНОСТИ СЕРВИСОВ
-    if not FIREBASE_INITIALIZED or not db:
-        logger.critical(f"Attempted API call {request.url.path} before Firebase initialization.")
-        return JSONResponse({"detail": "Сервис недоступен. Ожидание инициализации базы данных."}, status_code=503)
-
-    try:
-        user_id = await get_auth_data(request)
-        return await endpoint_handler(request, user_id)
-    except UnauthorizedException as e:
-        return JSONResponse({"detail": str(e)}, status_code=401)
-    except RuntimeError as e: # Для ошибки, если db не инициализирован
-        return JSONResponse({"detail": str(e)}, status_code=500)
-    except Exception as e:
-        logger.error(f"API Error in {request.url.path}: {e}")
-        return JSONResponse({"detail": "Внутренняя ошибка сервера"}, status_code=500)
-
-
-# Используем проверку firebase_admin, чтобы убедиться, что декоратор transactional не вызывается
-# с None-заглушкой, если произошел сбой импорта.
-if firebase_admin:
-    transactional_decorator = transactional
-else:
-    # Используем простую функцию-обертку, если transactional недоступен
-    def transactional_decorator(func):
-        return func
-
-@transactional_decorator
 def get_or_create_state_transaction(transaction, doc_ref, user_id: str):
-    """Транзакция для загрузки или создания состояния игры."""
+    """Функция транзакции для загрузки или создания состояния игры."""
     try:
-        # Проверяем, что db доступен, иначе функция-обертка провалится на .transaction()
-        if not db:
-             raise RuntimeError("Database not available for transaction.")
-             
         snapshot = doc_ref.get(transaction=transaction)
     except Exception as e:
         logger.error(f"Firestore read error during transaction: {e}")
@@ -214,26 +178,12 @@ def get_or_create_state_transaction(transaction, doc_ref, user_id: str):
     return state
 
 
-async def load_state_endpoint(request: Request, user_id: str):
-    """POST /api/load_state: Загружает или инициализирует состояние игры."""
-    doc_ref = get_user_doc_ref(user_id)
+def collect_income_transaction(transaction, doc_ref, user_id: str):
+    """Функция транзакции для сбора пассивного дохода."""
     
-    try:
-        # В этом месте db гарантированно инициализирован благодаря handle_api_request
-        state = get_or_create_state_transaction(db.transaction(), doc_ref, user_id)
-        
-        income, _ = calculate_passive_income(state)
-        state['available_income'] = income
-        
-        return JSONResponse(state)
-    except Exception as e:
-        logger.error(f"Error loading state for user {user_id}: {e}")
-        return JSONResponse({"detail": "Не удалось загрузить состояние игры"}, status_code=500)
-
-
-@transactional_decorator
-def collect_income_transaction(transaction, doc_ref, state: Dict[str, Any]):
-    """Транзакция для сбора пассивного дохода."""
+    # Сначала получаем текущее состояние в рамках транзакции
+    state = get_or_create_state_transaction(transaction, doc_ref, user_id)
+    
     try:
         income, new_last_time = calculate_passive_income(state)
         
@@ -258,23 +208,8 @@ def collect_income_transaction(transaction, doc_ref, state: Dict[str, Any]):
         raise
 
 
-async def collect_income_endpoint(request: Request, user_id: str):
-    """POST /api/collect_income: Сбор пассивного дохода."""
-    doc_ref = get_user_doc_ref(user_id)
-    
-    try:
-        # Получаем текущее состояние (оно уже будет в транзакции через декоратор)
-        state = get_or_create_state_transaction(db.transaction(), doc_ref, user_id)
-        updated_state = collect_income_transaction(db.transaction(), doc_ref, state)
-        return JSONResponse(updated_state)
-    except Exception as e:
-        logger.error(f"Error collecting income for user {user_id}: {e}")
-        return JSONResponse({"detail": "Не удалось собрать доход"}, status_code=500)
-
-
-@transactional_decorator
 def buy_sector_transaction(transaction, doc_ref, state: Dict[str, Any], sector_id: str):
-    """Транзакция для покупки сектора."""
+    """Функция транзакции для покупки сектора."""
     config = SECTORS_CONFIG.get(sector_id)
     if not config:
         raise ValueError("Invalid sector ID.")
@@ -308,6 +243,57 @@ def buy_sector_transaction(transaction, doc_ref, state: Dict[str, Any], sector_i
     return state
 
 
+# --- API Endpoints Handlers ---
+
+async def handle_api_request(request: Request, endpoint_handler):
+    """Общий обработчик для аутентификации и обработки исключений API."""
+    
+    if not FIREBASE_INITIALIZED or not db:
+        logger.critical(f"Attempted API call {request.url.path} before Firebase initialization.")
+        return JSONResponse({"detail": "Сервис недоступен. Ожидание инициализации базы данных."}, status_code=503)
+
+    try:
+        user_id = await get_auth_data(request)
+        return await endpoint_handler(request, user_id)
+    except UnauthorizedException as e:
+        return JSONResponse({"detail": str(e)}, status_code=401)
+    except RuntimeError as e: 
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    except Exception as e:
+        logger.error(f"API Error in {request.url.path}: {e}")
+        return JSONResponse({"detail": "Внутренняя ошибка сервера"}, status_code=500)
+
+
+async def load_state_endpoint(request: Request, user_id: str):
+    """POST /api/load_state: Загружает или инициализирует состояние игры."""
+    doc_ref = get_user_doc_ref(user_id)
+    
+    try:
+        # ЯВНОЕ ВЫПОЛНЕНИЕ ТРАНЗАКЦИИ
+        state = db.transaction().run(lambda t: get_or_create_state_transaction(t, doc_ref, user_id))
+        
+        income, _ = calculate_passive_income(state)
+        state['available_income'] = income
+        
+        return JSONResponse(state)
+    except Exception as e:
+        logger.error(f"Error loading state for user {user_id}: {e}")
+        return JSONResponse({"detail": "Не удалось загрузить состояние игры"}, status_code=500)
+
+
+async def collect_income_endpoint(request: Request, user_id: str):
+    """POST /api/collect_income: Сбор пассивного дохода."""
+    doc_ref = get_user_doc_ref(user_id)
+    
+    try:
+        # ЯВНОЕ ВЫПОЛНЕНИЕ ТРАНЗАКЦИИ
+        updated_state = db.transaction().run(lambda t: collect_income_transaction(t, doc_ref, user_id))
+        return JSONResponse(updated_state)
+    except Exception as e:
+        logger.error(f"Error collecting income for user {user_id}: {e}")
+        return JSONResponse({"detail": "Не удалось собрать доход"}, status_code=500)
+
+
 async def buy_sector_endpoint(request: Request, user_id: str):
     """POST /api/buy_sector: Покупка сектора."""
     doc_ref = get_user_doc_ref(user_id)
@@ -318,8 +304,20 @@ async def buy_sector_endpoint(request: Request, user_id: str):
         if sector_id not in SECTORS_CONFIG:
             return JSONResponse({"detail": "Неверный идентификатор сектора"}, status_code=400)
             
-        state = get_or_create_state_transaction(db.transaction(), doc_ref, user_id)
-        updated_state = buy_sector_transaction(db.transaction(), doc_ref, state, sector_id)
+        # Сначала получаем текущее состояние (вне транзакции) для проверки
+        # Хотя лучшей практикой было бы получить его внутри транзакции, 
+        # для простоты мы проверим только sector_id и отдадим управление транзакции.
+        
+        # ЯВНОЕ ВЫПОЛНЕНИЕ ТРАНЗАКЦИИ
+        # Здесь мы должны передать state, которое будет получено внутри buy_sector_transaction.
+        # Чтобы избежать двойного получения state, перепишем эту функцию в transaction.
+        
+        def run_buy_sector(transaction):
+            """Получает state и выполняет покупку в рамках одной транзакции."""
+            state = get_or_create_state_transaction(transaction, doc_ref, user_id)
+            return buy_sector_transaction(transaction, doc_ref, state, sector_id)
+
+        updated_state = db.transaction().run(run_buy_sector)
         
         return JSONResponse(updated_state)
     
@@ -342,7 +340,6 @@ async def telegram_webhook_handler(request: Request):
     try:
         body = await request.json()
         
-        # Обрабатываем обновление с помощью Application (требуется для PTB v20.9+)
         update = Update.de_json(body, tg_application.bot)
         await tg_application.process_update(update)
 
@@ -376,7 +373,6 @@ async def startup_event():
                 
                 cred = credentials.Certificate(service_account_info)
                 firebase_admin.initialize_app(cred)
-                # Безопасная инициализация db
                 db = firestore.client() 
                 
                 FIREBASE_INITIALIZED = True
@@ -395,7 +391,8 @@ async def startup_event():
             tg_application = get_telegram_application(BOT_TOKEN, BASE_URL)
             
             webhook_url = f"{BASE_URL}/telegram-webhook"
-            await tg_application.bot.set_webhook(url=webhook_url)
+            # Мы используем асинхронную функцию, поэтому await
+            await tg_application.bot.set_webhook(url=webhook_url) 
             
             TELEGRAM_WEBHOOK_ENABLED = True
             logger.info(f"✅ Telegram Webhook set to: {webhook_url}")
