@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import asyncio 
 import random 
 from typing import Dict
+import math # Импортируем math для pow
 
 from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -99,6 +100,8 @@ SECTOR_COSTS = {
     "sector2": 500.0, 
     "sector3": 2500.0
 }
+# Множитель стоимости для экспоненциального роста (должен совпадать с app.js)
+COST_MULTIPLIER = 1.15
 MAX_IDLE_TIME = 10 * 24 * 3600 # 10 дней в секундах
 
 # --- ЛОГИКА ТЕЛЕГРАМ БОТА ---
@@ -256,7 +259,7 @@ if tg_app:
             logger.error(f"Ошибка обработки вебхука Telegram: {e}")
             return {"status": "error", "message": str(e)}, 200 # Возвращаем 200 для Telegram
 
-# --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ (Без изменений) ---
+# --- API ЭНДПОИНТЫ ДЛЯ ИГРЫ (С ИЗМЕНЕНИЯМИ) ---
 @app.post("/api/load_state")
 async def load_state(request: Request):
     """Загружает состояние игры и применяет пассивный доход, используя Firestore."""
@@ -317,8 +320,14 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         state = await load_or_create_state(user_id)
         current_count = state.sectors.get(sector_name, 0)
         
-        # Стоимость = Базовая стоимость * (Количество + 1)
-        cost = SECTOR_COSTS[sector_name] * (current_count + 1)
+        # --- ИЗМЕНЕНИЕ ФОРМУЛЫ СТОИМОСТИ ---
+        # Стоимость = Базовая стоимость * (Множитель в степени текущего уровня)
+        # Формула совпадает с логикой фронтенда (app.js)
+        base_cost = SECTOR_COSTS[sector_name]
+        cost = base_cost * math.pow(COST_MULTIPLIER, current_count)
+
+        # Округляем до целых чисел (или до 2 знаков после запятой, для точности)
+        cost = round(cost, 2)
         
         if state.balance < cost:
             raise HTTPException(status_code=400, detail="Недостаточно средств для покупки.")
