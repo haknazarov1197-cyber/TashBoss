@@ -4,13 +4,19 @@ services:
     name: tashboss-api
     env: python
     # Команда, которую Render выполнит для установки зависимостей
+    # Убедитесь, что uvicorn присутствует в вашем requirements.txt
     buildCommand: "pip install -r requirements.txt"
-    # Команда, которую Render выполнит для запуска сервера
-    startCommand: "gunicorn api:app --workers 4 --bind 0.0.0.0:$PORT"
+    
+    # ИСПРАВЛЕННАЯ КОМАНДА ЗАПУСКА: Используем ASGI Worker от Uvicorn
+    # Это решает проблему TypeError: FastAPI.__call__() missing 1 required positional argument: 'send'
+    startCommand: "gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      # Добавьте здесь остальные важные переменные окружения, например:
+      # Вы должны добавить сюда ваши секретные переменные окружения,
+      # такие как BOT_TOKEN и FIREBASE_SERVICE_ACCOUNT_KEY
+      # Пример:
       # - key: BOT_TOKEN
       #   value: your_telegram_bot_token
       # - key: FIREBASE_SERVICE_ACCOUNT_KEY
