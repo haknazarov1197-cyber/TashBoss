@@ -3,68 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss Clicker</title>
-    <!-- Подключаем Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Подключаем Telegram WebApp SDK -->
+    <title>TashBoss - City Clicker</title>
+    <!-- Подключение Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Подключение Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Настройка шрифтов и фона */
+        /* Настройка шрифта Inter и кастомные стили */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #1a1a1a; /* Темный фон для приложения */
-            color: #ffffff;
+            background-color: #1a1a1a; /* Темный фон по умолчанию */
+            color: #e5e7eb;
             transition: background-color 0.3s;
         }
-        /* Стили для плавного скролла */
+        .container {
+            max-width: 600px;
+        }
         .card-shadow {
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.15);
+        }
+        /* Анимация кнопки сбора */
+        #collect-button {
+            transition: transform 0.1s ease-in-out, box-shadow 0.1s ease-in-out;
+        }
+        #collect-button:not(:disabled):active {
+            transform: scale(0.98);
+            box-shadow: none;
+        }
+        .balance-box {
+            background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
         }
     </style>
 </head>
-<body class="min-h-screen p-4">
-    <!-- Основной контейнер приложения -->
-    <div id="app" class="max-w-md mx-auto">
-        
-        <!-- Заголовок и баланс -->
-        <div class="bg-gray-800 p-4 rounded-xl shadow-lg mb-6">
-            <h1 class="text-3xl font-bold mb-2 text-center text-yellow-400">TashBoss</h1>
-            <div class="flex justify-between items-center text-sm font-light">
-                <span class="text-gray-400">Баланс (BSS):</span>
-                <span id="balance-display" class="text-2xl font-extrabold text-yellow-500">...</span>
+<body class="p-4 min-h-screen">
+    <div class="container mx-auto">
+        <!-- Заголовок и статус -->
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-extrabold text-white mb-2">TashBoss 🏙️</h1>
+            <p class="text-sm text-gray-400">Градостроительный кликер</p>
+            <div class="flex justify-center space-x-4 text-xs mt-2 text-gray-500">
+                <span>TG Status: <span id="tg-status" class="text-yellow-400">Loading...</span></span>
+                <span>API Status: <span id="backend-status" class="text-yellow-400">Idle</span></span>
             </div>
-            <div class="flex justify-between items-center text-sm font-light">
-                <span class="text-gray-400">Доход/сек:</span>
-                <span id="income-rate-display" class="text-xl font-bold text-green-500">...</span>
+        </header>
+
+        <!-- Блок Баланса и Дохода -->
+        <div class="balance-box p-4 rounded-xl card-shadow mb-6">
+            <div class="flex justify-between items-center mb-2">
+                <div>
+                    <p class="text-sm text-gray-300">Баланс BSS</p>
+                    <p id="balance-display" class="text-4xl font-bold text-yellow-400">0.00</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-sm text-gray-300">Пассивный доход/сек</p>
+                    <p id="income-rate-display" class="text-xl font-bold text-green-400">0.00</p>
+                </div>
+            </div>
+            
+            <!-- Кнопка сбора дохода -->
+            <div class="relative mt-4">
+                <button id="collect-button" 
+                        class="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition duration-150 ease-in-out disabled:bg-gray-500 disabled:text-gray-300" 
+                        disabled>
+                    Собрать доход (0.00 BSS)
+                </button>
+                <div id="collected-message" class="absolute inset-0 flex items-center justify-center text-white bg-green-700 rounded-xl hidden transition-opacity duration-300">
+                    Доход собран! +0.00 BSS
+                </div>
             </div>
         </div>
 
-        <!-- Кнопка сбора дохода -->
-        <div class="mb-6">
-            <button id="collect-button" 
-                    class="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition duration-150 ease-in-out card-shadow disabled:bg-gray-600 disabled:cursor-not-allowed"
-                    disabled>
-                Собрать доход (<span id="collect-amount">0.00</span> BSS)
-            </button>
-            <p id="collected-message" class="text-center text-green-400 mt-2 hidden">Доход собран! +0.00 BSS</p>
-        </div>
-        
-        <!-- Секция покупки секторов -->
-        <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-gray-700 pb-2">Покупка Секторов</h2>
-        
+        <!-- Секция Секторов (Магазин) -->
+        <h2 class="text-xl font-semibold text-white mb-3 mt-8 border-b border-gray-700 pb-2">Управление Секторами</h2>
         <div id="sectors-container" class="space-y-4">
-            <!-- Секторы будут вставлены сюда скриптом -->
-            <div class="text-center text-gray-500">Загрузка секторов...</div>
-        </div>
-
-        <!-- Статус и отладка -->
-        <div class="mt-8 p-3 bg-gray-900 rounded-lg text-xs text-gray-400">
-            <p>Статус WebApp: <span id="tg-status" class="text-red-500">Инициализация...</span></p>
-            <p>Статус Бэкенда: <span id="backend-status" class="text-red-500">Ожидание ответа...</span></p>
+            <!-- Секторы будут рендериться здесь из app.js -->
+            <div class="text-center p-8 text-gray-500">Загрузка данных...</div>
         </div>
     </div>
-    
-    <!-- Подключаем основной скрипт приложения -->
-    <script src="app.js"></script>
+
+    <!-- Подключение скрипта логики -->
+    <script type="module" src="./app.js"></script>
 </body>
 </html>
