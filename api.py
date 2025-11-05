@@ -3,7 +3,7 @@ import sys
 import logging
 import json
 from base64 import b64decode
-from binascii import Error as BinasciiError
+from binascii import Error as BinasciiError # Добавим этот импорт для ошибки Base64
 from datetime import datetime, timezone
 from typing import Dict, Any, Tuple 
 
@@ -17,7 +17,6 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
 # --- Firebase Admin SDK imports ---
-# КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Удалили импорт _firestore_helpers
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore, auth, exceptions
@@ -43,7 +42,6 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("api")
 
 # Глобальные переменные
-# Используем Any для безопасной подсказки типов
 db: Any = None 
 APP_ID = "tashboss-clicker-app" 
 FIREBASE_INITIALIZED = False
@@ -94,6 +92,7 @@ async def get_auth_data(request: Request) -> str:
         return uid
     except exceptions.AuthError as e:
         logger.error(f"Firebase Auth Error: {e}. Token: {id_token[:10]}...")
+        # Fallback for WebApp Query ID/Test Auth
         if len(id_token) > 20 and all(c.isalnum() or c in '_-' for c in id_token):
              logger.warning("Using WebApp Query ID as fallback UID.")
              return id_token
@@ -304,14 +303,6 @@ async def buy_sector_endpoint(request: Request, user_id: str):
         if sector_id not in SECTORS_CONFIG:
             return JSONResponse({"detail": "Неверный идентификатор сектора"}, status_code=400)
             
-        # Сначала получаем текущее состояние (вне транзакции) для проверки
-        # Хотя лучшей практикой было бы получить его внутри транзакции, 
-        # для простоты мы проверим только sector_id и отдадим управление транзакции.
-        
-        # ЯВНОЕ ВЫПОЛНЕНИЕ ТРАНЗАКЦИИ
-        # Здесь мы должны передать state, которое будет получено внутри buy_sector_transaction.
-        # Чтобы избежать двойного получения state, перепишем эту функцию в transaction.
-        
         def run_buy_sector(transaction):
             """Получает state и выполняет покупку в рамках одной транзакции."""
             state = get_or_create_state_transaction(transaction, doc_ref, user_id)
@@ -341,12 +332,15 @@ async def telegram_webhook_handler(request: Request):
         body = await request.json()
         
         update = Update.de_json(body, tg_application.bot)
+        # Мы используем run_coroutine_threadsafe для обработки обновления
+        # Но в uvicorn/starlette, мы можем просто использовать await для process_update
         await tg_application.process_update(update)
 
         return JSONResponse({"status": "ok"}, status_code=200)
 
     except Exception as e:
         logger.error(f"Error processing Telegram update: {e}")
+        # Telegram всегда ожидает 200 OK, даже если произошла ошибка, чтобы избежать повторной отправки.
         return JSONResponse({"status": "error", "message": str(e)}, status_code=200)
 
 
@@ -366,41 +360,77 @@ async def startup_event():
         if not FIREBASE_KEY_BASE64:
             logger.critical("❌ CRITICAL ERROR: Environment variable FIREBASE_SERVICE_ACCOUNT_KEY is not set.")
         else:
+            service_account_info = None
+            
+            # --- ПОПЫТКА 1: ДЕКОДИРОВАТЬ BASE64 (с нашей функцией отступов) ---
             try:
                 padded_key = add_padding_if_needed(FIREBASE_KEY_BASE64)
                 decoded_key_bytes = b64decode(padded_key)
                 service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
-                
-                cred = credentials.Certificate(service_account_info)
-                firebase_admin.initialize_app(cred)
-                db = firestore.client() 
-                
-                FIREBASE_INITIALIZED = True
-                logger.info("✅ Firebase successfully initialized.")
-                
+                logger.info("Firebase key successfully decoded from Base64.")
             except BinasciiError as e:
-                logger.critical(f"❌ CRITICAL ERROR: Failed to init Firebase. Base64 decoding error: {e}. Check the key.")
+                logger.warning(f"Failed to decode Firebase key as Base64 ({e}). Trying as raw JSON...")
             except Exception as e:
-                logger.critical(f"❌ CRITICAL ERROR: Unexpected error during Firebase initialization: {e}")
+                 logger.warning(f"Failed to decode Firebase key as Base64 ({e}). Trying as raw JSON...")
+            
+            # --- ПОПЫТКА 2: ОБРАБОТАТЬ КАК ЧИСТЫЙ JSON ---
+            if service_account_info is None:
+                try:
+                    # Убираем возможные пробелы и символы новой строки
+                    key_data_cleaned = FIREBASE_KEY_BASE64.strip()
+                    service_account_info = json.loads(key_data_cleaned)
+                    logger.info("Firebase key successfully parsed as raw JSON string.")
+                except json.JSONDecodeError as e:
+                    logger.critical(f"❌ CRITICAL ERROR: Failed to init Firebase. Failed to parse key as JSON: {e}")
+                except Exception as e:
+                    logger.critical(f"❌ CRITICAL ERROR: Unexpected error during Firebase initialization (raw JSON attempt): {e}")
+
+            # --- ИНИЦИАЛИЗАЦИЯ С ПОЛУЧЕННЫМИ ДАННЫМИ ---
+            if service_account_info:
+                try:
+                    cred = credentials.Certificate(service_account_info)
+                    firebase_admin.initialize_app(cred)
+                    db = firestore.client() 
+                    
+                    FIREBASE_INITIALIZED = True
+                    logger.info("✅ Firebase successfully initialized.")
+                    
+                except Exception as e:
+                    logger.critical(f"❌ CRITICAL ERROR: Failed to initialize Firebase App with credentials: {e}")
     else:
         logger.critical("❌ CRITICAL ERROR: Firebase Admin SDK imports failed. Firestore and Auth APIs will be unavailable.")
 
+
     # 2. Инициализация Telegram Bot и установка вебхука
     if BOT_TOKEN and firebase_admin: 
+        # Проверяем, что bot.py доступен (чтобы избежать ошибок с get_telegram_application)
         try:
-            tg_application = get_telegram_application(BOT_TOKEN, BASE_URL)
+            from bot import get_telegram_application 
+        except ImportError:
+            logger.critical("❌ CRITICAL ERROR: bot.py not found. Cannot initialize Telegram bot.")
+            return
+
+        # Устанавливаем вебхук только один раз
+        if tg_application is None:
+            try:
+                tg_application = get_telegram_application(BOT_TOKEN, BASE_URL)
+                
+                webhook_url = f"{BASE_URL}/telegram-webhook"
+                # Мы используем асинхронную функцию, поэтому await
+                await tg_application.bot.set_webhook(url=webhook_url) 
+                
+                TELEGRAM_WEBHOOK_ENABLED = True
+                logger.info(f"✅ Telegram Webhook set to: {webhook_url}")
+                
+            except ValueError as e:
+                logger.error(f"❌ ERROR setting Telegram Webhook: Bot token is invalid or missing during application build: {e}")
+            except Exception as e:
+                # Избегаем спама 'Too Many Requests' в логах, который генерируется gunicorn
+                if "Too Many Requests" not in str(e):
+                    logger.error(f"❌ ERROR setting Telegram Webhook: {e}")
+                else:
+                    logger.warning(f"⚠️ Warning: Telegram Webhook set attempt returned 429 (Too Many Requests). Assuming webhook is already correct.")
             
-            webhook_url = f"{BASE_URL}/telegram-webhook"
-            # Мы используем асинхронную функцию, поэтому await
-            await tg_application.bot.set_webhook(url=webhook_url) 
-            
-            TELEGRAM_WEBHOOK_ENABLED = True
-            logger.info(f"✅ Telegram Webhook set to: {webhook_url}")
-            
-        except ValueError:
-            logger.error("❌ ERROR setting Telegram Webhook: Bot token is invalid or missing during application build.")
-        except Exception as e:
-            logger.error(f"❌ ERROR setting Telegram Webhook: {e}")
     else:
         logger.critical("❌ CRITICAL WARNING: BOT_TOKEN is not set or Firebase imports failed. Telegram bot functionality is disabled.")
 
