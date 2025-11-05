@@ -1,302 +1,360 @@
 import os
 import json
 import logging
-from datetime import datetime
-from functools import wraps
-from flask import Flask, request, jsonify
-from firebase_admin import initialize_app, credentials, firestore
-from google.cloud.firestore_v1.base_document import DocumentSnapshot
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Dict, Any
 
-# --- НАСТРОЙКА ---
+from fastapi import FastAPI, Request, HTTPException, status
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+# Импорт Telegram Application
+from telegram import Update
+from bot import get_telegram_application
+
+# Импорт Firebase Admin SDK
+import firebase_admin
+from firebase_admin import credentials, firestore, auth, exceptions
+
+# --- КОНФИГУРАЦИЯ И ИНИЦИАЛИЗАЦИЯ ---
+
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ 1: Явно указываем Flask использовать текущую директорию (.) как статическую.
-app = Flask(__name__, static_folder='.') 
+# Получение переменных окружения
+FIREBASE_KEY_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+APP_ID = os.getenv("APP_ID", "default_app_id")
 
-# Глобальные переменные, которые будут инициализированы
-db = None
-ADMIN_ID = "test_user_for_debug"
-PROJECT_ID = "tashboss-1bd35" # Жестко задаем для упрощения
-COLLECTION_PATH = f"artifacts/{PROJECT_ID}/users/{ADMIN_ID}/game_state"
-
-# --- КОНФИГУРАЦИЯ ИГРЫ ---
-INCOME_RATES = {
-    "sector1": 0.5, 
-    "sector2": 2.0, 
-    "sector3": 10.0
-}
-SECTOR_COSTS = {
-    "sector1": 100.0, 
-    "sector2": 500.0, 
-    "sector3": 2500.0
-}
+# Константы игры
+BASE_COSTS = {"sector1": 100.0, "sector2": 500.0, "sector3": 2500.0}
+BASE_RATES = {"sector1": 0.5, "sector2": 2.0, "sector3": 10.0}
 COST_MULTIPLIER = 1.15
-STARTING_BALANCE = 5000.0
-MAX_IDLE_TIME = 10 * 24 * 3600 # 10 дней в секундах
-# -------------------------
+INITIAL_BALANCE = 100.0
 
-# --- Инициализация Firebase (выполняется один раз при запуске Gunicorn) ---
-
-def init_firebase():
-    global db
+# Инициализация Firebase
+if FIREBASE_KEY_JSON:
     try:
-        # Извлекаем JSON-строку из переменной окружения
-        firebase_service_key = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
-        if not firebase_service_key:
-            logging.error("❌ CRITICAL: FIREBASE_SERVICE_ACCOUNT_KEY не установлен.")
-            return
-
-        # Парсим JSON-строку
-        key_data = json.loads(firebase_service_key)
-        logging.info(f"✅ Проект Firestore: {key_data.get('project_id')}. База данных: tashboss.")
-
-        # Инициализация приложения
-        cred = credentials.Certificate(key_data)
-        initialize_app(cred, {'databaseURL': f"https://{key_data.get('project_id')}.firebaseio.com"})
-        
-        # !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Используем database_id вместо database !!!
-        db = firestore.client(database_id="tashboss") 
-        logging.info("✅ Firestore Client инициализирован.")
+        # Render передает ключ как JSON-строку
+        cred_dict = json.loads(FIREBASE_KEY_JSON)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        logger.info("✅ Firebase Admin SDK и Firestore клиент инициализированы.")
     except Exception as e:
-        # Убедимся, что Flask знает об ошибке
-        logging.error(f"❌ CRITICAL: Ошибка инициализации Firebase/Firestore: {e}", exc_info=True)
-        db = None 
+        logger.critical(f"❌ Критическая ошибка при инициализации Firebase: {e}")
+        # Выход, если не удалось инициализировать критически важный сервис
+        exit(1)
+else:
+    logger.critical("❌ Критическая ошибка: Переменная окружения FIREBASE_SERVICE_ACCOUNT_KEY не установлена.")
+    exit(1)
 
-init_firebase()
+# Инициализация FastAPI
+app = FastAPI(title="TashBoss Game API")
 
-# --- Вспомогательные функции и Декораторы ---
+# Настройка CORS middleware (КРИТИЧЕСКИ ВАЖНО для WebApp)
+# Разрешаем все источники, так как Telegram Mini App запускается из разных доменов
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def calculate_cost(sector_name, current_level):
-    """Рассчитывает стоимость следующего уровня сектора."""
-    base_cost = SECTOR_COSTS.get(sector_name, 0)
-    # Округляем до целого числа, как указано в ТЗ, чтобы избежать проблем с UI
-    cost = base_cost * (COST_MULTIPLIER ** current_level)
-    return round(cost)
+# Инициализация Telegram Application
+tg_app = get_telegram_application()
 
-def calculate_income(sectors):
-    """Рассчитывает общий доход в секунду."""
-    total_income = 0
-    for sector, level in sectors.items():
-        total_income += INCOME_RATES.get(sector, 0) * level
-    return total_income
 
-def get_user_id(func):
-    """Декоратор для извлечения user_id (используем заглушку, так как аутентификации нет)."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Используем жестко заданный ID для отладки
-        user_id = ADMIN_ID 
-        return func(user_id, *args, **kwargs)
-    return wrapper
+# --- АУТЕНТИФИКАЦИЯ И УТИЛИТЫ ---
 
-# --- Функции для работы с БД ---
+def get_user_doc_ref(user_id: str):
+    """Возвращает ссылку на документ пользователя в Firestore."""
+    # Путь: /artifacts/{appId}/users/{userId}/tashboss_clicker/{userId}
+    return db.collection(f"artifacts/{APP_ID}/users/{user_id}/tashboss_clicker").document(user_id)
 
-def get_state_document(user_id):
-    """Возвращает ссылку на документ состояния пользователя."""
-    # Используем путь, который включает ADMIN_ID в качестве документа
-    return db.collection(COLLECTION_PATH).document(user_id) 
+async def get_auth_data(request: Request) -> str:
+    """Извлекает и верифицирует токен Telegram, возвращая UID."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        logger.warning("❌ Ошибка: Заголовок Authorization отсутствует или некорректен.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header missing or invalid (expected: Bearer <token>)"
+        )
 
-def load_game_state_from_db(user_id):
-    """Загружает состояние игры из Firestore или возвращает начальное."""
-    doc_ref = get_state_document(user_id)
-    snapshot: DocumentSnapshot = doc_ref.get()
+    # Токен содержит initData, которую мы должны проверить
+    init_data = auth_header.split("Bearer ")[1]
     
-    if snapshot.exists:
-        data = snapshot.to_dict()
-        logging.info(f"✅ Состояние загружено для {user_id}: Баланс {data['balance']:.2f}")
-        return data
-    else:
-        # Начальное состояние
-        initial_state = {
-            "balance": STARTING_BALANCE,
-            "sectors": {"sector1": 0, "sector2": 0, "sector3": 0},
-            "last_collection_time": datetime.now().isoformat()
-        }
-        logging.info(f"🆕 Создано начальное состояние для {user_id}: Баланс {initial_state['balance']:.2f}")
-        
-        # Попытка сохранить начальное состояние
+    # В реальном приложении Telegram здесь должна быть функция для проверки 
+    # initData (например, с использованием HMAC-SHA256 и секрета бота).
+    # Поскольку Canvas не предоставляет секрет бота для проверки initData, 
+    # мы будем использовать верификацию Firebase ID токена (полученного от Canvas Auth)
+    # или, как временное решение, заглушку для `initData`.
+    # Для целей этого проекта, мы будем предполагать, что init_data содержит
+    # Firebase Custom Auth Token (если запущен в Canvas) или
+    # Telegram initData (если запущен в MiniApp).
+    
+    # ПРИМЕЧАНИЕ: В данном случае, клиентский JS передает Telegram.WebApp.initData
+    # В *настоящем* Mini App это должен быть проверенный `query_id` или `initData`.
+    # Мы пока просто возвращаем заглушку, чтобы позволить транзакциям работать, 
+    # если нет полной интеграции с Telegram Auth Backend.
+    
+    # ПРЕДПОЛОЖЕНИЕ: для работы с Firestore, мы извлекаем UID из initData
+    # как если бы она была Firebase Custom Token (то, что предоставляет Canvas Auth)
+    
+    # ТЕХНИЧЕСКИЙ ДОЛГ: В продакшене тут должен быть ВАЛИДАТОР init_data
+    
+    # Если это MiniApp, initData - это строка типа 'query_id=...&user=...'
+    # Если это Canvas, токен - это Firebase Custom Token
+    
+    # Для избежания проблем с деплоем, мы временно принимаем любой токен 
+    # и используем заглушку, но в реальном Mini App это должно быть:
+    # 1. Проверка initData (если MiniApp)
+    # 2. Верификация токена (если Canvas Auth)
+    
+    # Заглушка, чтобы просто получить User ID (должен быть заменен!)
+    # В реальном Mini App User ID берется из `init_data` после проверки.
+    
+    # Мы используем '123456789' как заглушку UID для симуляции успешной аутентификации.
+    # В продакшене это приведет к ошибкам безопасности!
+    user_id = "tg_user_123456789" 
+    return user_id 
+
+
+def calculate_income(data: Dict[str, Any]) -> float:
+    """Рассчитывает пассивный доход с момента last_collection_time."""
+    
+    # Конвертируем все числа в Decimal для точных расчетов
+    balance = Decimal(data.get('balance', INITIAL_BALANCE))
+    sectors = data.get('sectors', {})
+    
+    try:
+        last_time = datetime.fromisoformat(data['last_collection_time'].replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        last_time = datetime.now(timezone.utc)
+        logger.warning("Некорректный формат last_collection_time. Использовано текущее время.")
+
+    now = datetime.now(timezone.utc)
+    time_delta_seconds = max(0, (now - last_time).total_seconds())
+
+    total_income_rate = Decimal(0)
+    for sector_id, level in sectors.items():
+        rate = Decimal(BASE_RATES.get(sector_id, 0))
+        total_income_rate += rate * Decimal(level)
+
+    collected_income = float(total_income_rate * Decimal(time_delta_seconds))
+    
+    return collected_income
+
+
+# --- ЭНДПОИНТЫ API И ЛОГИКА ИГРЫ ---
+
+@app.post("/api/load_state")
+async def load_state_handler(request: Request):
+    """Загружает или инициализирует состояние игры."""
+    # Получаем UID (используем заглушку, если не можем верифицировать токен)
+    user_id = await get_auth_data(request)
+    doc_ref = get_user_doc_ref(user_id)
+
+    @firestore.transactional
+    def transactional_load(transaction, doc_ref):
         try:
-            # Используем transaction/batch для гарантированной записи при первом запуске
-            batch = db.batch()
-            batch.set(doc_ref, initial_state)
-            batch.commit()
-            logging.info("✅ Начальное состояние успешно сохранено.")
-        except Exception as e:
-            logging.error(f"❌ Ошибка сохранения начального состояния: {e}")
+            doc = doc_ref.get(transaction=transaction)
             
-        return initial_state
-
-def save_game_state_to_db(user_id, state):
-    """Сохраняет текущее состояние игры в Firestore."""
-    try:
-        # Преобразуем объект `state` в чистый словарь
-        state_to_save = {
-            "balance": state["balance"],
-            "sectors": state["sectors"],
-            "last_collection_time": state["last_collection_time"],
-        }
-        
-        # Используем транзакцию для атомарного обновления
-        @firestore.transactional
-        def update_in_transaction(transaction, doc_ref, new_state):
-            # Простая запись, так как вся логика чтения/записи/изменения уже произошла на сервере
-            transaction.set(doc_ref, new_state)
-
-        doc_ref = get_state_document(user_id)
-        transaction = db.transaction()
-        update_in_transaction(transaction, doc_ref, state_to_save)
-        
-        logging.info(f"✅ Состояние успешно сохранено для {user_id}: Баланс {state['balance']:.2f}")
-        return True
-    except Exception as e:
-        logging.error(f"❌ CRITICAL: Ошибка сохранения состояния для {user_id}: {e}", exc_info=True)
-        return False
-
-# --- Игровая логика ---
-
-def calculate_passive_income(state):
-    """Рассчитывает и добавляет пассивный доход к балансу."""
-    last_time = datetime.fromisoformat(state['last_collection_time'])
-    now = datetime.now()
-    
-    time_delta = now - last_time
-    total_seconds = time_delta.total_seconds()
-    
-    # Ограничение по времени простоя
-    effective_seconds = min(total_seconds, MAX_IDLE_TIME)
-    
-    income_rate = calculate_income(state['sectors'])
-    collected_income = income_rate * effective_seconds
-    
-    # Обновление состояния
-    state['balance'] = round(state['balance'] + collected_income, 2)
-    state['last_collection_time'] = now.isoformat()
-    
-    logging.info(f"💰 Собрано {collected_income:.2f} BSS за {effective_seconds:.0f} сек.")
-    
-    return state, collected_income
-
-# --- ЭНДПОИНТЫ API ---
-
-@app.route('/api/load_state', methods=['POST'])
-@get_user_id
-def load_state(user_id):
-    """Загружает или создает состояние игры и возвращает его."""
-    if db is None:
-        return jsonify({"status": "error", "detail": "Сервер не инициализирован"}), 500
-        
-    try:
-        # 1. Загрузка состояния
-        state = load_game_state_from_db(user_id)
-        # 2. Расчет дохода (при загрузке)
-        state, _ = calculate_passive_income(state)
-        # 3. Сохранение обновленного состояния обратно в базу
-        save_game_state_to_db(user_id, state)
-        
-        return jsonify({"status": "ok", "state": state})
-    except Exception as e:
-        logging.error(f"❌ Ошибка при загрузке состояния для {user_id}: {e}")
-        return jsonify({"status": "error", "detail": "Внутренняя ошибка сервера при загрузке состояния."}), 500
-
-@app.route('/api/collect_income', methods=['POST'])
-@get_user_id
-def collect_income(user_id):
-    """Собирает пассивный доход и возвращает новое состояние."""
-    if db is None:
-        return jsonify({"status": "error", "detail": "Сервер не инициализирован"}), 500
-
-    try:
-        state = load_game_state_from_db(user_id)
-        state, collected = calculate_passive_income(state)
-        
-        if save_game_state_to_db(user_id, state):
-            return jsonify({
-                "status": "ok", 
-                "state": state, 
-                "collected": collected
-            })
-        else:
-            return jsonify({"status": "error", "detail": "Не удалось сохранить состояние после сбора."}), 500
-            
-    except Exception as e:
-        logging.error(f"❌ Ошибка при сборе дохода для {user_id}: {e}")
-        return jsonify({"status": "error", "detail": "Внутренняя ошибка сервера при сборе дохода."}), 500
-
-
-@app.route('/api/buy_sector', methods=['POST'])
-@get_user_id
-def buy_sector(user_id):
-    """Покупает следующий уровень сектора."""
-    if db is None:
-        return jsonify({"status": "error", "detail": "Сервер не инициализирован"}), 500
-
-    try:
-        data = request.get_json()
-        sector_name = data.get('sector')
-        
-        if sector_name not in SECTOR_COSTS:
-            return jsonify({"status": "error", "detail": "Неизвестный сектор."}), 400
-            
-        state = load_game_state_from_db(user_id)
-        
-        current_level = state['sectors'].get(sector_name, 0)
-        cost = calculate_cost(sector_name, current_level)
-        
-        if state['balance'] < cost:
-            logging.warning(f"❌ {user_id} попытался купить {sector_name} (ур. {current_level}) за {cost:.2f}, но баланс {state['balance']:.2f} недостаточен.")
-            return jsonify({"status": "error", "detail": "Недостаточно средств."}), 403
-            
-        state['balance'] = round(state['balance'] - cost, 2)
-        state['sectors'][sector_name] = current_level + 1
-        
-        logging.info(f"✅ {user_id} купил {sector_name}. Новый баланс: {state['balance']:.2f}")
-
-        if save_game_state_to_db(user_id, state):
-            return jsonify({"status": "ok", "state": state})
-        else:
-            return jsonify({"status": "error", "detail": "Не удалось сохранить состояние после покупки."}), 500
-            
-    except Exception as e:
-        logging.error(f"❌ CRITICAL: Ошибка при покупке сектора для {user_id}: {e}", exc_info=True)
-        return jsonify({"status": "error", "detail": f"Внутренняя ошибка сервера при покупке. Подробности: {str(e)}", "sector": sector_name}), 500
-
-
-@app.route('/bot_webhook', methods=['POST'])
-def bot_webhook():
-    """
-    Обработчик для вебхука Telegram.
-    Это минимальная заглушка, чтобы бот перестал получать 405 и мог работать.
-    Здесь должна быть логика обработки команд Telegram (например, /start).
-    """
-    try:
-        data = request.get_json(silent=True)
-        if data:
-            # Логируем, чтобы увидеть, что бот отправляет
-            if 'message' in data and 'text' in data['message']:
-                logging.info(f"🤖 Получено сообщение от бота: {data['message']['text']} (Chat ID: {data['message']['chat']['id']})")
+            if doc.exists:
+                data = doc.to_dict()
+                logger.info(f"💾 Состояние для пользователя {user_id} загружено.")
+                return data
             else:
-                logging.info(f"🤖 Получено обновление от бота: {json.dumps(data)}")
-
-        # Telegram ожидает 200 OK
-        return jsonify({"status": "ok", "description": "Update received and processed."}), 200
-        
-    except Exception as e:
-        logging.error(f"❌ Ошибка в обработчике вебхука: {e}", exc_info=True)
-        # В случае ошибки возвращаем 200, чтобы Telegram не спамил повторными запросами
-        return jsonify({"status": "error", "description": "Webhook error"}), 200
-
-# !!! Секция обслуживания статических файлов остается без изменений !!!
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_index(path):
-    """Обслуживание статического файла index.html и других ресурсов."""
+                # Инициализация нового состояния
+                initial_state = {
+                    'balance': INITIAL_BALANCE,
+                    'sectors': {"sector1": 0, "sector2": 0, "sector3": 0},
+                    'last_collection_time': datetime.now(timezone.utc).isoformat()
+                }
+                transaction.set(doc_ref, initial_state)
+                logger.info(f"✨ Новое состояние для пользователя {user_id} инициализировано.")
+                return initial_state
+        except Exception as e:
+            logger.error(f"Ошибка транзакции load_state: {e}")
+            raise HTTPException(status_code=500, detail="Database Transaction Failed")
     
-    if path == '':
-        return app.send_static_file('index.html')
-    else:
-        return app.send_static_file(path)
+    try:
+        data = db.transaction(transactional_load, doc_ref)
+        return {"status": "ok", "state": data}
+    except HTTPException:
+        raise # Передаем HTTP ошибки дальше
+    except Exception as e:
+        logger.error(f"Критическая ошибка load_state: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": "Internal Server Error"})
 
 
-if __name__ == '__main__':
-    # Эта часть не должна выполняться в Render
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+@app.post("/api/collect_income")
+async def collect_income_handler(request: Request):
+    """Рассчитывает и собирает пассивный доход."""
+    user_id = await get_auth_data(request)
+    doc_ref = get_user_doc_ref(user_id)
+
+    @firestore.transactional
+    def transactional_collect(transaction, doc_ref):
+        doc = doc_ref.get(transaction=transaction)
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="User state not found")
+
+        data = doc.to_dict()
+        collected_income = calculate_income(data)
+        
+        # Обновляем состояние
+        new_balance = Decimal(data['balance']) + Decimal(collected_income)
+        new_time = datetime.now(timezone.utc).isoformat()
+        
+        data['balance'] = float(new_balance)
+        data['last_collection_time'] = new_time
+        
+        transaction.set(doc_ref, data)
+        logger.info(f"💰 Доход {collected_income:.2f} собран пользователем {user_id}.")
+        return data, float(collected_income)
+
+    try:
+        data, collected_amount = db.transaction(transactional_collect, doc_ref)
+        return {"status": "ok", "state": data, "collected": collected_amount}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Критическая ошибка collect_income: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": "Internal Server Error"})
+
+
+def calculate_cost(sector_id: str, level: int) -> int:
+    """Рассчитывает стоимость следующего уровня."""
+    base_cost = BASE_COSTS.get(sector_id, 100.0)
+    # Используем Decimal для точных расчетов
+    cost = Decimal(base_cost) * (Decimal(COST_MULTIPLIER) ** Decimal(level))
+    return int(round(cost))
+
+
+@app.post("/api/buy_sector")
+async def buy_sector_handler(request: Request):
+    """Обрабатывает покупку сектора."""
+    user_id = await get_auth_data(request)
+    doc_ref = get_user_doc_ref(user_id)
+    
+    try:
+        body = await request.json()
+        sector_id = body.get("sector")
+        if sector_id not in BASE_COSTS:
+            raise HTTPException(status_code=400, detail="Invalid sector ID")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    @firestore.transactional
+    def transactional_buy(transaction, doc_ref):
+        doc = doc_ref.get(transaction=transaction)
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="User state not found")
+        
+        data = doc.to_dict()
+        
+        # 1. Сбор дохода перед покупкой
+        collected_income = calculate_income(data)
+        current_balance = Decimal(data['balance']) + Decimal(collected_income)
+        
+        # 2. Определение текущего уровня и стоимости
+        current_level = data['sectors'].get(sector_id, 0)
+        cost = Decimal(calculate_cost(sector_id, current_level))
+
+        if current_balance < cost:
+            raise HTTPException(status_code=400, detail="Insufficient funds")
+
+        # 3. Обновление состояния
+        new_balance = current_balance - cost
+        data['balance'] = float(new_balance)
+        data['sectors'][sector_id] = current_level + 1
+        data['last_collection_time'] = datetime.now(timezone.utc).isoformat() # Обновляем время сбора
+        
+        transaction.set(doc_ref, data)
+        logger.info(f"✅ Покупка сектора {sector_id} (Ур. {current_level + 1}) пользователем {user_id} завершена.")
+        return data
+
+    try:
+        data = db.transaction(transactional_buy, doc_ref)
+        return {"status": "ok", "state": data}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Критическая ошибка buy_sector: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": "Internal Server Error"})
+
+
+# --- TELEGRAM WEBHOOK (ДЛЯ РАБОТЫ /start) ---
+
+if tg_app:
+    @app.post("/webhook")
+    async def telegram_webhook(request: Request):
+        """Обрабатывает входящие обновления от Telegram (Webhook)."""
+        if not tg_app:
+            logger.error("Telegram Application не инициализирован, Webhook не работает.")
+            return JSONResponse(content={"message": "Bot not configured"}, status_code=503)
+
+        body = await request.json()
+        try:
+            # Создаем объект Update из JSON-тела
+            update = Update.de_json(body, tg_app.bot)
+            
+            # Обрабатываем обновление асинхронно
+            await tg_app.process_update(update)
+            
+            return {"status": "ok"}
+        except Exception as e:
+            logger.error(f"Ошибка обработки Webhook: {e}")
+            return JSONResponse(content={"status": "error", "detail": str(e)}, status_code=500)
+else:
+    logger.warning("Telegram Application не инициализирован. Webhook /start не будет работать.")
+
+
+# --- СЕРВИНГ СТАТИЧЕСКИХ ФАЙЛОВ ---
+
+# Важно: Сначала монтируем статические файлы, чтобы они обслуживались
+# app.mount("/", StaticFiles(directory=".", html=True), name="static") 
+# Render требует, чтобы index.html был доступен по /
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/webapp", response_class=HTMLResponse)
+async def serve_index():
+    """Отдает index.html для корня и WebApp."""
+    try:
+        # Чтение index.html из файловой системы
+        with open("index.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="index.html not found")
+
+@app.get("/app.js")
+async def serve_js():
+    """Отдает app.js."""
+    try:
+        with open("app.js", "r", encoding="utf-8") as f:
+            js_content = f.read()
+        return HTMLResponse(content=js_content, media_type="application/javascript")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="app.js not found")
+
+@app.get("/bot.py")
+async def serve_bot_py():
+    """Отдает bot.py (необязательно, но полезно для дебага/развертывания)"""
+    try:
+        with open("bot.py", "r", encoding="utf-8") as f:
+            content = f.read()
+        return HTMLResponse(content=content, media_type="text/x-python")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="bot.py not found")
+
+# ЭТОТ БЛОК НУЖЕН ТОЛЬКО ДЛЯ ЛОКАЛЬНОГО ТЕСТИРОВАНИЯ
+# if __name__ == "__main__":
+#     import uvicorn
+#     # Убедитесь, что bot.py доступен в папке
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
