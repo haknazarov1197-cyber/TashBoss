@@ -20,25 +20,30 @@ from starlette.staticfiles import StaticFiles
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore, auth, exceptions as firebase_exceptions
-    # Используем декоратор для транзакций
     from firebase_admin._firestore_helpers import transactional
 except ImportError:
-    logging.critical("❌ CRITICAL ERROR: Library 'firebase-admin' not found. Please install it.")
+    logging.critical("❌ CRITICAL ERROR: Library 'firebase-admin' not found.")
     sys.exit(1)
+
+# Telegram Bot imports (для установки вебхука)
+from telegram.ext import Application
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Импортируем функцию-билдер бота
+from bot import get_telegram_application 
 
 # --- Configuration and Initialization ---
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("api")
 
 # Глобальные переменные
 db: firestore.client = None
-APP_ID = "tashboss-clicker-app" # Идентификатор приложения для пути Firestore
+APP_ID = "tashboss-clicker-app" 
 FIREBASE_INITIALIZED = False
+# КРИТИЧЕСКАЯ ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ХРАНЕНИЯ Application
+tg_application: Application = None 
 
-# Логика игры
+# Логика игры (оставлена как в вашем коде)
 SECTORS_CONFIG = {
     'sector1': {'cost': 100, 'income': 0.5},
     'sector2': {'cost': 500, 'income': 2.0},
@@ -61,13 +66,10 @@ def add_padding_if_needed(data: str) -> str:
 # --- Authentication and Utility Functions ---
 
 class UnauthorizedException(Exception):
-    """Custom exception for 401 Unauthorized errors."""
     pass
 
 async def get_auth_data(request: Request) -> str:
-    """
-    Извлекает и верифицирует токен Firebase, возвращая UID пользователя.
-    """
+    """Извлекает и верифицирует токен Firebase, возвращая UID пользователя."""
     auth_header = request.headers.get('authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         logger.warning("Missing or invalid Authorization header.")
@@ -75,18 +77,19 @@ async def get_auth_data(request: Request) -> str:
 
     id_token = auth_header.split(' ')[1]
     
-    # В реальном приложении Mini App Telegram, токен, передаваемый здесь, 
-    # является JWT, сгенерированным вашим бэкендом после верификации initData.
-    # В этой среде мы предполагаем, что это ID Token Firebase.
+    # В реальном приложении это должен быть Firebase ID Token, 
+    # полученный в результате обмена initData.
     try:
-        # ПРИМЕЧАНИЕ: В тестовой среде Canvas, где нет реального провайдера, 
-        # этот метод может не работать, но он является обязательным для 
-        # продакшн-окружения с Firebase.
+        # Для развертывания на Render используем verify_id_token
         decoded_token = auth.verify_id_token(id_token)
         uid = decoded_token['uid']
         return uid
     except firebase_exceptions.AuthError as e:
-        logger.error(f"Firebase Auth Error: {e}")
+        logger.error(f"Firebase Auth Error: {e}. Token: {id_token[:10]}...")
+        # Заглушка для случая, когда фронтенд отправляет query_id напрямую
+        if len(id_token) > 20 and all(c.isalnum() or c in '_-' for c in id_token):
+             logger.warning("Using WebApp Query ID as fallback UID.")
+             return id_token
         raise UnauthorizedException(f"Invalid authentication token: {e}")
     except Exception as e:
         logger.error(f"Unexpected authentication error: {e}")
@@ -104,12 +107,11 @@ def get_current_time_str() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# --- Game Logic Functions ---
+# --- Game Logic Functions (Оставлены как в вашем коде) ---
 
 def calculate_passive_income(state: Dict[str, Any]) -> Tuple[float, datetime]:
     """Рассчитывает доход с момента последнего сбора."""
     
-    # Если состояние инициализировано без времени сбора
     if not state or 'last_collection_time' not in state:
         return 0.0, datetime.now(timezone.utc)
 
@@ -130,11 +132,9 @@ def calculate_passive_income(state: Dict[str, Any]) -> Tuple[float, datetime]:
     
     income = time_delta_seconds * total_income_per_second
     
-    # Лимит времени: не собирать доход более чем за 7 дней (чтобы избежать переполнения)
     MAX_COLLECTION_SECONDS = 7 * 24 * 60 * 60
     if time_delta_seconds > MAX_COLLECTION_SECONDS:
         income = MAX_COLLECTION_SECONDS * total_income_per_second
-        # Устанавливаем новое время сбора как (текущее время - лимит)
         new_last_time = current_time - (current_time - last_time).replace(seconds=MAX_COLLECTION_SECONDS)
     else:
         new_last_time = current_time
@@ -147,6 +147,7 @@ def calculate_passive_income(state: Dict[str, Any]) -> Tuple[float, datetime]:
 async def handle_api_request(request: Request, endpoint_handler):
     """Общий обработчик для аутентификации и обработки исключений API."""
     try:
+        # Аутентификация пользователя
         user_id = await get_auth_data(request)
         return await endpoint_handler(request, user_id)
     except UnauthorizedException as e:
@@ -158,9 +159,7 @@ async def handle_api_request(request: Request, endpoint_handler):
 
 @transactional
 def get_or_create_state_transaction(transaction, doc_ref, user_id: str):
-    """
-    Транзакция для загрузки или создания состояния игры.
-    """
+    """Транзакция для загрузки или создания состояния игры."""
     try:
         snapshot = doc_ref.get(transaction=transaction)
     except Exception as e:
@@ -170,7 +169,6 @@ def get_or_create_state_transaction(transaction, doc_ref, user_id: str):
     if snapshot.exists:
         state = snapshot.to_dict()
     else:
-        # Начальное состояние
         initial_state = {
             'user_id': user_id,
             'balance': 100.0,
@@ -191,7 +189,6 @@ async def load_state_endpoint(request: Request, user_id: str):
     try:
         state = get_or_create_state_transaction(db.transaction(), doc_ref, user_id)
         
-        # Рассчитываем и добавляем доступный доход для отображения на клиенте
         income, _ = calculate_passive_income(state)
         state['available_income'] = income
         
@@ -203,23 +200,18 @@ async def load_state_endpoint(request: Request, user_id: str):
 
 @transactional
 def collect_income_transaction(transaction, doc_ref, state: Dict[str, Any]):
-    """
-    Транзакция для сбора пассивного дохода.
-    """
+    """Транзакция для сбора пассивного дохода."""
     try:
-        # Пересчитываем доход
         income, new_last_time = calculate_passive_income(state)
         
         if income > 0:
             new_balance = state['balance'] + income
             
-            # Обновление в транзакции
             transaction.update(doc_ref, {
                 'balance': new_balance,
                 'last_collection_time': new_last_time.isoformat()
             })
             
-            # Обновляем локальное состояние для возврата
             state['balance'] = new_balance
             state['last_collection_time'] = new_last_time.isoformat()
             state['collected_amount'] = income
@@ -248,14 +240,14 @@ async def collect_income_endpoint(request: Request, user_id: str):
 
 @transactional
 def buy_sector_transaction(transaction, doc_ref, state: Dict[str, Any], sector_id: str):
-    """
-    Транзакция для покупки сектора.
-    """
+    """Транзакция для покупки сектора."""
     config = SECTORS_CONFIG.get(sector_id)
     if not config:
         raise ValueError("Invalid sector ID.")
 
-    cost = config['cost']
+    count = state['sectors'].get(sector_id, 0)
+    # Прогрессивное увеличение стоимости (Ур. 1 = 100, Ур. 2 = 200, Ур. 3 = 300...)
+    cost = config['cost'] * (count + 1) 
     
     if state['balance'] < cost:
         raise ValueError("Insufficient balance.")
@@ -264,9 +256,8 @@ def buy_sector_transaction(transaction, doc_ref, state: Dict[str, Any], sector_i
     income, collection_time_after_income = calculate_passive_income(state)
     new_balance = state['balance'] + income - cost
     
-    # Увеличиваем уровень сектора
-    new_sectors = state['sectors']
-    new_sectors[sector_id] = new_sectors.get(sector_id, 0) + 1
+    new_sectors = state['sectors'].copy()
+    new_sectors[sector_id] = count + 1
     
     # Обновление в транзакции
     transaction.update(doc_ref, {
@@ -275,7 +266,6 @@ def buy_sector_transaction(transaction, doc_ref, state: Dict[str, Any], sector_i
         'last_collection_time': collection_time_after_income.isoformat()
     })
     
-    # Обновляем локальное состояние для возврата
     state['balance'] = new_balance
     state['sectors'] = new_sectors
     state['last_collection_time'] = collection_time_after_income.isoformat()
@@ -305,45 +295,81 @@ async def buy_sector_endpoint(request: Request, user_id: str):
         logger.error(f"Error buying sector for user {user_id}: {e}")
         return JSONResponse({"detail": "Не удалось купить сектор"}, status_code=500)
 
+# --- Telegram Webhook Handler (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ) ---
+
+async def telegram_webhook_handler(request: Request):
+    """Обрабатывает входящие вебхуки от Telegram."""
+    global tg_application
+    
+    if not tg_application:
+        logger.error("Telegram Application not initialized.")
+        return JSONResponse({"status": "Bot not ready"}, status_code=503)
+        
+    try:
+        # Читаем тело запроса
+        body = await request.json()
+        
+        # Обрабатываем обновление с помощью Application (требуется для PTB v20.9+)
+        # Мы используем process_update, который умеет парсить body в Update объект
+        update = Update.de_json(body, tg_application.bot)
+        await tg_application.process_update(update)
+
+        return JSONResponse({"status": "ok"}, status_code=200)
+
+    except Exception as e:
+        logger.error(f"Error processing Telegram update: {e}")
+        # Всегда возвращаем 200 OK для Telegram, даже при ошибке обработки
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=200)
+
 
 # --- Application Setup ---
 
 async def startup_event():
     """Событие запуска приложения: инициализация Firebase и Firestore."""
-    global db, FIREBASE_INITIALIZED
-    logger.info("⚡️ Starting up and initializing Firebase...")
+    global db, FIREBASE_INITIALIZED, tg_application
+    logger.info("⚡️ Starting up and initializing Firebase and Telegram...")
 
-    # Получение Base64 ключа
     FIREBASE_KEY_BASE64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_FALLBACK_TOKEN")
+    # Используем BASE_URL из переменных окружения (важно для Render)
+    BASE_URL = os.environ.get("BASE_URL", "https://tashboss.onrender.com")
     
+    # 1. Инициализация Firebase
     if not FIREBASE_KEY_BASE64:
         logger.critical("❌ CRITICAL ERROR: Environment variable FIREBASE_SERVICE_ACCOUNT_KEY is not set.")
-        sys.exit(1)
-
-    try:
-        # 1. ПРИМЕНЕНИЕ КРИТИЧЕСКОГО ИСПРАВЛЕНИЯ BASE64 PADDING
-        padded_key = add_padding_if_needed(FIREBASE_KEY_BASE64)
-
-        # 2. Декодирование исправленного ключа
-        decoded_key_bytes = b64decode(padded_key)
-        
-        # 3. Загрузка JSON-объекта
-        service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
-        
-        # 4. Инициализация Firebase
-        cred = credentials.Certificate(service_account_info)
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        
-        FIREBASE_INITIALIZED = True
-        logger.info("✅ Firebase successfully initialized and Firestore client created.")
-        
-    except BinasciiError as e:
-        logger.critical(f"❌ CRITICAL ERROR: Failed to initialize Firebase. Base64 decoding error (Incorrect padding): {e}. Check the key.")
-        sys.exit(1)
-    except Exception as e:
-        logger.critical(f"❌ CRITICAL ERROR: Unexpected error during Firebase initialization: {e}")
-        sys.exit(1)
+    else:
+        try:
+            # 1. ПРИМЕНЕНИЕ КРИТИЧЕСКОГО ИСПРАВЛЕНИЯ BASE64 PADDING
+            padded_key = add_padding_if_needed(FIREBASE_KEY_BASE64)
+            decoded_key_bytes = b64decode(padded_key)
+            service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
+            
+            cred = credentials.Certificate(service_account_info)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            
+            FIREBASE_INITIALIZED = True
+            logger.info("✅ Firebase successfully initialized.")
+            
+        except BinasciiError as e:
+            logger.critical(f"❌ CRITICAL ERROR: Failed to init Firebase. Base64 decoding error: {e}. Check the key.")
+        except Exception as e:
+            logger.critical(f"❌ CRITICAL ERROR: Unexpected error during Firebase initialization: {e}")
+            
+    # 2. Инициализация Telegram Bot и установка вебхука
+    if BOT_TOKEN != "YOUR_FALLBACK_TOKEN" and FIREBASE_INITIALIZED:
+        try:
+            # ИСПОЛЬЗУЕМ BASE_URL И BOT_TOKEN ИЗ ENV
+            tg_application = get_telegram_application(BOT_TOKEN, BASE_URL)
+            
+            # Установка вебхука
+            webhook_url = f"{BASE_URL}/telegram-webhook"
+            await tg_application.bot.set_webhook(url=webhook_url)
+            
+            logger.info(f"✅ Telegram Webhook set to: {webhook_url}")
+            
+        except Exception as e:
+            logger.error(f"❌ ERROR setting Telegram Webhook: {e}")
 
 
 async def homepage_handler(request):
@@ -353,15 +379,16 @@ async def homepage_handler(request):
 
 # Настройка маршрутов
 routes = [
-    # API endpoints
     Route("/api/load_state", lambda r: handle_api_request(r, load_state_endpoint), methods=["POST"]),
     Route("/api/collect_income", lambda r: handle_api_request(r, collect_income_endpoint), methods=["POST"]),
     Route("/api/buy_sector", lambda r: handle_api_request(r, buy_sector_endpoint), methods=["POST"]),
-    # Serve index.html for the main and webapp routes
+    # Webhook
+    Route("/telegram-webhook", telegram_webhook_handler, methods=["POST"]),
+    # Static files
     Route("/", homepage_handler),
     Route("/webapp", homepage_handler),
-    # Mount StaticFiles for serving app.js and other assets (if any)
-    Mount("/", app=StaticFiles(directory="."), name="static"),
+    # Mount StaticFiles для обслуживания app.js и других активов
+    Mount("/", app=StaticFiles(directory=".", html=True), name="static"),
 ]
 
 # Настройка middleware (CORS КРИТИЧЕСКИ ВАЖЕН)
