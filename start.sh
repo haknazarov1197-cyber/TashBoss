@@ -3,9 +3,7 @@
 # Установка переменных окружения для логирования
 set -eo pipefail
 
-echo "Starting Gunicorn using 'python -m gunicorn' to ensure the correct Python environment is loaded."
+echo "Executing start.sh script. Launching Gunicorn via 'python -m gunicorn' to ensure all libraries are found."
 
-# ИСПОЛЬЗУЕМ: 'python -m gunicorn' вместо просто 'gunicorn'
-# Это гарантирует, что мы используем Python-интерпретатор,
-# который установил все зависимости, включая 'firebase-admin'.
+# Используем 'python -m gunicorn' для запуска в контексте установленных библиотек
 /usr/bin/env python -m gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:"$PORT"
