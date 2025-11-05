@@ -20,8 +20,9 @@ from starlette.staticfiles import StaticFiles
 # Firebase Dependencies
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app, auth
-# УДАЛЕНО: from google.cloud.firestore import transaction # -> Это вызывало ошибку ImportError
-from google.cloud.firestore import transaction as firestore_transaction # Используем алиас, чтобы избежать конфликтов, если бы это было нужно, но в основном коде используется декоратор @firestore.transactional
+# УДАЛЕНО: from google.cloud.firestore import transaction as firestore_transaction
+# УДАЛЕНО: from google.cloud.firestore import transaction
+# Транзакции обрабатываются декоратором @firestore.transactional, который использует firestore, импортированный выше.
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -407,3 +408,7 @@ app = Starlette(
     middleware=middleware,
     on_startup=[startup_event],
 )
+
+# Добавляем обслуживание статических файлов
+# (это не строго обязательно, так как root_route возвращает HTML, но полезно для app.js)
+app.mount("/", StaticFiles(directory="."), name="static")
