@@ -74,9 +74,12 @@ async def startup_event():
     # 1. Инициализация Firebase
     try:
         # --- БЕЗОПАСНАЯ ОБРАБОТКА BASE64 КЛЮЧА ---
+        # ОЧЕНЬ ВАЖНО: Удаляем любые пробелы, переводы строк или лишние символы.
+        cleaned_key = FIREBASE_KEY.strip().replace('\n', '').replace('\r', '')
+
         # Рассчитываем и добавляем необходимое количество символов '=' для Base64 padding
-        padding_needed = -len(FIREBASE_KEY) % 4
-        padded_key = FIREBASE_KEY + '=' * padding_needed
+        padding_needed = -len(cleaned_key) % 4
+        padded_key = cleaned_key + '=' * padding_needed
         
         # Декодируем ключ
         decoded_key_bytes = b64decode(padded_key)
@@ -89,7 +92,8 @@ async def startup_event():
         logger.info("✅ Firebase успешно инициализирован.")
     except Exception as e:
         logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase. Ошибка: {e}")
-        sys.exit(1)
+        # При критической ошибке Firebase мы завершаем работу
+        sys.exit(1) 
 
     # 2. Инициализация Telegram Application (используя код из bot.py)
     webhook_url = f"{BASE_URL}/webhook"
