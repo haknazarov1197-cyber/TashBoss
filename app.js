@@ -23,6 +23,21 @@ const COST_MULTIPLIER = 1.15;
 // --- УТИЛИТЫ ---
 
 /**
+ * Получает токен авторизации (Query ID) из Telegram WebApp.
+ * @returns {string | null}
+ */
+const getAuthToken = () => {
+    // Используем initDataUnsafe, как требует бэкенд (для проверки подлинности)
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.query_id) {
+        // ВАЖНО: Бэкенд ожидает query_id или initData целиком для проверки.
+        // Передаем initData целиком, чтобы бэкенд мог ее валидировать.
+        return window.Telegram.WebApp.initData;
+    }
+    // Заглушка для режима отладки (если нет токена)
+    return 'DEBUG_TOKEN_PLACEHOLDER'; 
+};
+
+/**
  * Форматирует число до двух знаков после запятой.
  * @param {number} value 
  * @returns {string}
@@ -52,12 +67,27 @@ const calculateCost = (sectorId, currentLevel) => {
  * @returns {Promise<object | null>} - Объект ответа с данными или null в случае ошибки.
  */
 async function fetchApi(url, body = null) {
+    const authToken = getAuthToken(); // Получаем токен
+    
+    if (!authToken || authToken === 'DEBUG_TOKEN_PLACEHOLDER') {
+         document.getElementById('backend-status').textContent = 'Ошибка: Нет токена TG';
+         if (url === LOAD_ENDPOINT) {
+            // Разрешаем загрузку в отладочном режиме с заглушкой
+            console.warn("DEBUG MODE: Using placeholder token.");
+         } else {
+             showNotification('Ошибка аутентификации', 'Не удалось получить данные Telegram для авторизации.', 'error');
+             return null;
+         }
+    }
+    
     try {
         document.getElementById('backend-status').textContent = 'Отправка запроса...';
         const options = {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                // КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Передача токена авторизации
+                'Authorization': `Bearer ${authToken}`
             }
         };
 
