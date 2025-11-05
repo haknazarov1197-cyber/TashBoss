@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import asyncio 
 import random 
 from typing import Dict
-import math # Импортируем math для pow
+import math 
 
 from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -145,6 +145,7 @@ tg_app = get_telegram_application()
 def get_db_ref(user_id: str):
     """Получает ссылку на документ пользователя в Firestore."""
     if not db:
+        # Эта ошибка должна срабатывать только если Firebase не инициализирован
         raise HTTPException(status_code=500, detail="Firestore не инициализирован. Проверьте FIREBASE_SERVICE_ACCOUNT_KEY.")
     return db.collection("users").document(user_id) 
 
@@ -164,6 +165,35 @@ async def get_auth_data(request: Request) -> dict:
     user_id = hashlib.sha256(init_data.encode('utf-8')).hexdigest()
     
     return {"uid": user_id}
+
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Оборачиваем синхронные вызовы Firestore в asyncio.to_thread
+async def save_state(user_id: str, state: UserState):
+    """Сохраняет состояние пользователя в Firestore, используя asyncio.to_thread."""
+    user_ref = get_db_ref(user_id)
+    # Оборачиваем синхронную сетевую операцию записи
+    await asyncio.to_thread(user_ref.set, state.model_dump())
+    logger.info(f"Сохранено состояние для UID: {user_id}")
+
+async def load_or_create_state(user_id: str) -> UserState:
+    """Загружает состояние пользователя из Firestore или создает новое с 5000 BSS, используя asyncio.to_thread."""
+    user_ref = get_db_ref(user_id)
+    
+    # Оборачиваем синхронную сетевую операцию получения документа
+    doc = await asyncio.to_thread(user_ref.get)
+
+    if doc.exists:
+        # to_dict - это локальная операция, не требует to_thread
+        data = doc.to_dict()
+        state = UserState(**data)
+        logger.info(f"Загружено состояние для UID: {user_id}")
+    else:
+        # Добавление стартового капитала (5000 BSS)
+        state = UserState(balance=5000.0) 
+        await save_state(user_id, state) # save_state теперь тоже асинхронный
+        logger.info(f"Создано новое состояние со стартовым капиталом для UID: {user_id}")
+        
+    return state
+# КОНЕЦ КРИТИЧЕСКОГО ИСПРАВЛЕНИЯ
 
 def calculate_income(state: UserState) -> tuple[float, datetime]:
     """Рассчитывает доход с момента последнего сбора."""
@@ -185,28 +215,6 @@ def calculate_income(state: UserState) -> tuple[float, datetime]:
             
     return income, now
 
-async def load_or_create_state(user_id: str) -> UserState:
-    """Загружает состояние пользователя из Firestore или создает новое с 5000 BSS."""
-    user_ref = get_db_ref(user_id)
-    doc = user_ref.get()
-
-    if doc.exists:
-        data = doc.to_dict()
-        state = UserState(**data)
-        logger.info(f"Загружено состояние для UID: {user_id}")
-    else:
-        # Добавление стартового капитала (5000 BSS)
-        state = UserState(balance=5000.0) 
-        await save_state(user_id, state)
-        logger.info(f"Создано новое состояние со стартовым капиталом для UID: {user_id}")
-        
-    return state
-
-async def save_state(user_id: str, state: UserState):
-    """Сохраняет состояние пользователя в Firestore."""
-    user_ref = get_db_ref(user_id)
-    user_ref.set(state.model_dump())
-    logger.info(f"Сохранено состояние для UID: {user_id}")
 
 # --- ФУНКЦИЯ ДЛЯ УСТАНОВКИ WEBHOOK ---
 async def set_telegram_webhook():
@@ -267,19 +275,22 @@ async def load_state(request: Request):
         auth_data = await get_auth_data(request)
         user_id = auth_data.get("uid")
 
-        state = await load_or_create_state(user_id)
+        # Теперь load_or_create_state полностью асинхронна и безопасна
+        state = await load_or_create_state(user_id) 
         collected_income, current_time = calculate_income(state)
         
         state.balance += collected_income
         state.last_collection_time = current_time.isoformat()
         
-        await save_state(user_id, state)
+        # Теперь save_state полностью асинхронна и безопасна
+        await save_state(user_id, state) 
 
         return {"status": "ok", "state": state.model_dump(), "collected_income": collected_income}
     except HTTPException as e:
         raise e
     except Exception as e:
         logger.error(f"Ошибка в load_state: {e}")
+        # Возвращаем общую ошибку, но знаем, что проблема решена
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при загрузке состояния.")
 
 
@@ -320,9 +331,7 @@ async def buy_sector(req: BuySectorRequest, request: Request):
         state = await load_or_create_state(user_id)
         current_count = state.sectors.get(sector_name, 0)
         
-        # --- ИЗМЕНЕНИЕ ФОРМУЛЫ СТОИМОСТИ ---
         # Стоимость = Базовая стоимость * (Множитель в степени текущего уровня)
-        # Формула совпадает с логикой фронтенда (app.js)
         base_cost = SECTOR_COSTS[sector_name]
         cost = base_cost * math.pow(COST_MULTIPLIER, current_count)
 
@@ -355,7 +364,7 @@ async def buy_sector(req: BuySectorRequest, request: Request):
 @app.get("/health_check")
 def read_root():
     """Простой ответ для проверки работоспособности (health check)."""
-    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Init Order)."}
+    return {"status": "ok", "message": "TashBoss Clicker API is running (Fixed Async Firestore)."}
 
 # Обслуживание статических файлов (index.html, app.js, style.css)
 app.mount("/", StaticFiles(directory=".", html=True), name="static")
