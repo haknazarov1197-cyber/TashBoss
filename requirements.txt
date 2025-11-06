@@ -1,6 +1,7 @@
+fastapi
 starlette
-python-telegram-bot
-firebase-admin
-gunicorn
 uvicorn
+gunicorn
+firebase-admin
+python-telegram-bot
 httpx
