@@ -2,13 +2,10 @@ import os
 import sys
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-
-# FastAPI и инструментыimport os
-import sys
-import json
-import logging
 import httpx # Используем httpx для асинхронных HTTP-запросов к Telegram API
+import hashlib
+import hmac
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 # FastAPI и инструменты
@@ -17,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Dict, Any
 
 # Firebase Admin SDK
 import firebase_admin
@@ -36,7 +34,8 @@ if not logger.handlers:
 # --- Глобальные переменные ---
 FIREBASE_APP = None
 DB_CLIENT: Client | None = None
-APP_ID = "tashboss-1bd35" # ИДЕНТИФИКАТОР ПРОЕКТА, СООТВЕТСТВУЮЩИЙ FIREBASE KEY
+# ИДЕНТИФИКАТОР ПРОЕКТА, СООТВЕТСТВУЮЩИЙ FIREBASE KEY
+APP_ID = "tashboss-1bd35" 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 # --- Конфигурация Игры ---
@@ -61,6 +60,13 @@ class GameState(BaseModel):
     purchase_successful: bool = False
     collected_amount: float = 0.0
 
+class TelegramAuthRequest(BaseModel):
+    init_data: str # Строка initData, переданная WebApp
+
+class FirebaseTokenResponse(BaseModel):
+    firebase_token: str
+    uid: str
+
 # Схемы для Webhook
 class TelegramMessage(BaseModel):
     text: str | None = None
@@ -83,6 +89,7 @@ def init_firebase():
         sys.exit(1)
         
     try:
+        # Убедитесь, что строка ключа корректно обрабатывается
         cleaned_key_string = key_string.strip().strip("'\"").replace('\n', '').replace('\r', '')
         service_account_info = json.loads(cleaned_key_string)
 
@@ -161,6 +168,74 @@ async def send_telegram_message(chat_id: int, text: str, web_app_url: str):
         except Exception as e:
             logger.error(f"❌ Неожиданная ошибка при отправке сообщения Telegram: {e}")
 
+
+def check_telegram_init_data(init_data: str) -> Dict[str, Any] | None:
+    """
+    Проверяет Telegram initData по алгоритму, описанному в документации.
+    Возвращает словарь данных, если проверка успешна, иначе None.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("❌ TELEGRAM_BOT_TOKEN не установлен. Проверка initData невозможна.")
+        return None
+        
+    try:
+        # 1. Секретный ключ для HMAC SHA-256
+        secret_key = hmac.new(
+            key=b"WebAppData",
+            msg=TELEGRAM_BOT_TOKEN.encode(),
+            digestmod=hashlib.sha256
+        ).digest()
+
+        # 2. Разбор init_data
+        parsed_data = urllib.parse.parse_qs(init_data)
+        
+        # 3. Извлечение hash и создание списка данных для проверки
+        hash_to_check = parsed_data.pop('hash', [None])[0]
+        
+        if not hash_to_check:
+            logger.warning("Telegram initData не содержит hash.")
+            return None
+
+        # 4. Создание строки data_check_string
+        data_check_list = []
+        for key in sorted(parsed_data.keys()):
+            # Исключаем 'hash' из data_check_string
+            if key != 'hash':
+                # urllib.parse.qs возвращает список, берем первый элемент
+                value = parsed_data[key][0]
+                data_check_list.append(f"{key}={value}")
+        
+        data_check_string = "\n".join(data_check_list)
+
+        # 5. Вычисление HMAC
+        calculated_hash = hmac.new(
+            key=secret_key,
+            msg=data_check_string.encode('utf-8'),
+            digestmod=hashlib.sha256
+        ).hexdigest()
+
+        # 6. Сравнение
+        if calculated_hash.lower() == hash_to_check.lower():
+            logger.info("✅ Telegram initData успешно проверен.")
+            
+            # Извлечение данных пользователя
+            user_data_str = parsed_data.get('user', [None])[0]
+            if user_data_str:
+                user_data = json.loads(user_data_str)
+                # Добавляем данные пользователя для удобства
+                parsed_data['user_data'] = [user_data]
+            
+            # Возвращаем все разобранные данные
+            return parsed_data
+        else:
+            logger.warning(f"❌ Неверный Telegram hash. Calculated: {calculated_hash}, Received: {hash_to_check}")
+            return None
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки Telegram initData: {e}", exc_info=True)
+        return None
+
+
 # --- Аутентификация: Зависимость FastAPI ---
 
 async def get_auth_data(request: Request) -> str:
@@ -202,7 +277,6 @@ def calculate_passive_income(game_data: dict) -> tuple[float, datetime]:
     Рассчитывает пассивный доход, накопленный с last_collection_time.
     Возвращает (накопленный_доход, новое_время_сбора).
     """
-    # ... (Остальная часть функции остается без изменений)
     last_collection_time = game_data.get('last_collection_time')
     if not last_collection_time or not isinstance(last_collection_time, datetime):
         return 0.0, datetime.now(timezone.utc)
@@ -238,7 +312,6 @@ def calculate_passive_income(game_data: dict) -> tuple[float, datetime]:
 @firestore.transactional
 def get_or_create_state_transaction(transaction: Transaction, doc_ref, user_id: str) -> dict:
     """Получает состояние или создает новое в транзакции."""
-    # ... (Остальная часть функции остается без изменений)
     doc = doc_ref.get(transaction=transaction)
     
     if doc.exists:
@@ -258,7 +331,6 @@ def get_or_create_state_transaction(transaction: Transaction, doc_ref, user_id: 
 @firestore.transactional
 def collect_income_transaction(transaction: Transaction, doc_ref, game_data: dict) -> tuple[dict, float]:
     """Собирает пассивный доход и обновляет баланс в транзакции."""
-    # ... (Остальная часть функции остается без изменений)
     accumulated_income, new_time = calculate_passive_income(game_data)
     
     if accumulated_income > 0.0:
@@ -282,7 +354,6 @@ def collect_income_transaction(transaction: Transaction, doc_ref, game_data: dic
 @firestore.transactional
 def buy_sector_transaction(transaction: Transaction, doc_ref, game_data: dict, sector_id: str) -> tuple[dict, bool, float]:
     """Покупает следующий уровень сектора в транзакции."""
-    # ... (Остальная часть функции остается без изменений)
     game_data, collected_amount = collect_income_transaction(transaction, doc_ref, game_data)
 
     current_level = game_data['sectors'].get(sector_id, 0)
@@ -335,7 +406,6 @@ async def serve_index():
 async def telegram_webhook(update: TelegramUpdate, request: Request):
     """
     Принимает обновления от Telegram и обрабатывает команду /start.
-    ЭТО НОВЫЙ ЭНДПОИНТ.
     """
     if update.message and update.message.text:
         text = update.message.text.strip()
@@ -359,10 +429,60 @@ async def telegram_webhook(update: TelegramUpdate, request: Request):
             
             return JSONResponse({"status": "success", "message": "Command processed"})
         
-        # Добавьте другую логику обработки сообщений здесь
         logger.info(f"Получено сообщение от чата {chat_id}: {text}")
 
     return JSONResponse({"status": "ignored", "message": "No action required"})
+
+
+@app.post("/api/get_firebase_token", response_model=FirebaseTokenResponse)
+async def get_token_for_webapp(request_data: TelegramAuthRequest):
+    """
+    Проверяет init_data от Telegram и генерирует кастомный токен Firebase.
+    ЭТО НОВЫЙ КРИТИЧЕСКИЙ ЭНДПОИНТ.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("❌ TELEGRAM_BOT_TOKEN не установлен. Отказ в аутентификации WebApp.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Токен бота не установлен на сервере."
+        )
+
+    # 1. Проверка initData
+    parsed_data = check_telegram_init_data(request_data.init_data)
+    
+    if not parsed_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Недействительные или просроченные данные Telegram InitData."
+        )
+
+    # 2. Извлечение user ID
+    user_data = parsed_data.get('user_data', [{}])[0]
+    
+    # Telegram user ID является UID для Firebase
+    tg_user_id = str(user_data.get('id')) 
+    if not tg_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Данные Telegram не содержат ID пользователя."
+        )
+    
+    # 3. Генерация кастомного токена Firebase
+    try:
+        # Аутентификация использует уникальный ID пользователя Telegram
+        firebase_token = auth.create_custom_token(tg_user_id).decode('utf-8')
+        logger.info(f"✅ Создан кастомный токен Firebase для TG ID: {tg_user_id}")
+        
+        return FirebaseTokenResponse(
+            firebase_token=firebase_token,
+            uid=tg_user_id
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации токена Firebase для {tg_user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при создании токена Firebase."
+        )
 
 
 @app.post("/api/load_state", response_model=GameState)
