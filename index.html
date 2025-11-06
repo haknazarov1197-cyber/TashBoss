@@ -46,6 +46,12 @@
         .buy-button:not(:disabled):hover {
             box-shadow: 0 4px 15px rgba(52, 211, 153, 0.5);
         }
+        
+        /* Для плавного исчезновения баннера */
+        #messageBanner {
+            opacity: 1;
+            transition: opacity 0.5s ease-in-out;
+        }
     </style>
 </head>
 <body>
@@ -65,7 +71,7 @@
             <div class="card bg-gray-900/50 p-6">
                 <p class="text-gray-400 text-sm">Ваш текущий баланс (BossCoin):</p>
                 <!-- Добавляем ID пользователя для отладки -->
-                <p class="text-xs text-gray-500 mb-2">ID: <span id="userIdDisplay">...</span></p>
+                <p class="text-xs text-gray-500 mb-2">UID: <span id="userIdDisplay">...</span></p>
                 
                 <div class="balance-display" id="balanceDisplay">0.00</div>
                 <p class="text-gray-400 text-xs mt-2" id="passiveIncomeDisplay">Пассивный доход/сек: 0.00</p>
@@ -90,24 +96,24 @@
         </div>
     </div>
 
-    <!-- Подключение Firebase SDK и Логики -->
+    <!-- Подключение Логики -->
     <script type="module" src="./app.js"></script>
     <script type="module">
         // --- Скрипт Инициализации Firebase и Аутентификации ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, onAuthStateChanged, signOut, getIdToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithCustomToken, getIdToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Глобальные Настройки ---
-        // Эти переменные должны быть доступны в Canvas
+        // Жестко заданный (фейковый) config для инициализации Firebase Client SDK
+        // ВАЖНО: Project ID должен совпадать с тем, что в ключе сервисного аккаунта на бэкенде.
         const firebaseConfig = { projectId: "tashboss-clicker-app" }; 
         const API_BASE_URL = window.location.origin;
 
         // --- DOM Элементы ---
         const statusMessage = document.getElementById('statusMessage');
-        const gameContent = document.getElementById('gameContent');
 
-        // Включаем логирование
+        // Включаем логирование Firebase
         setLogLevel('debug');
 
 
@@ -117,6 +123,7 @@
          */
         function getTelegramUserId() {
             if (typeof window.Telegram !== 'undefined' && window.Telegram.WebApp.initDataUnsafe.user) {
+                // Возвращаем ID в виде строки, как требует Firebase Auth
                 return window.Telegram.WebApp.initDataUnsafe.user.id.toString();
             }
             console.error("Telegram WebApp SDK user data not found.");
@@ -142,7 +149,7 @@
 
                 if (response.ok) {
                     const data = await response.json();
-                    return data.token; // Custom Token
+                    return data.token; // Custom Token (строка)
                 }
                 
                 const errorData = await response.json().catch(() => ({ detail: 'Неизвестная ошибка сервера' }));
@@ -163,21 +170,23 @@
                 statusMessage.textContent = "Инициализация Firebase (шаг 3/4)...";
                 
                 const app = initializeApp(firebaseConfig);
-                const auth = getAuth(app);
+                const authClient = getAuth(app);
                 
                 statusMessage.textContent = "Вход в систему (шаг 4/4)...";
 
                 // Вход с помощью Custom Token
-                const userCredential = await signInWithCustomToken(auth, customToken);
+                const userCredential = await signInWithCustomToken(authClient, customToken);
                 
-                console.log(`✅ Успешный вход в Firebase. UID: ${userCredential.user.uid}`);
+                const userUID = userCredential.user.uid;
+                console.log(`✅ Успешный вход в Firebase. UID: ${userUID}`);
                 
                 // Получаем ID Token, который будем использовать для всех запросов к API
+                // ID Token будет автоматически обновляться Firebase SDK при необходимости
                 const idToken = await getIdToken(userCredential.user);
 
                 // Вызываем глобальную функцию в app.js для запуска основной логики игры
                 if (window.initAppAfterAuth) {
-                    window.initAppAfterAuth(idToken);
+                    window.initAppAfterAuth(idToken, userUID);
                 } else {
                     console.error("initAppAfterAuth is not defined in app.js.");
                 }
@@ -185,6 +194,12 @@
                 // Скрываем статус и показываем контент
                 statusMessage.classList.add('hidden');
                 
+                // Показываем кнопку закрытия Telegram WebApp
+                window.Telegram.WebApp.ready();
+                window.Telegram.WebApp.MainButton.setText("Закрыть игру").show().onClick(() => {
+                    window.Telegram.WebApp.close();
+                });
+
             } catch (error) {
                 console.error("Firebase initialization or sign-in failed:", error);
                 statusMessage.textContent = `Ошибка: Не удалось войти в Firebase. ${error.message}`;
@@ -206,8 +221,7 @@
         }
         
         // Запускаем приложение при загрузке DOM
-        main(); 
-        
+        document.addEventListener('DOMContentLoaded', main);
     </script>
 </body>
 </html>
