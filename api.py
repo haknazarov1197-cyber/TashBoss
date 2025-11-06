@@ -32,7 +32,8 @@ logger = logging.getLogger('api')
 # Это гарантирует, что мы инициализируем Firebase только один раз.
 firebase_app = None
 db_client: Optional[BaseClient] = None
-auth_client: Optional[auth.BaseAuth] = None
+# ИСПРАВЛЕНИЕ: Заменено auth.BaseAuth на Any, чтобы избежать AttributeError при запуске.
+auth_client: Optional[Any] = None 
 
 # Константы
 FIREBASE_KEY_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT_JSON'
