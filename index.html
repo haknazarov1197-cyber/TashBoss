@@ -3,729 +3,445 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss: Симулятор Города</title>
+    <title>TashBoss Clicker</title>
+    <!-- Подключение Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Установка шрифта Inter -->
     <style>
-        /* Пользовательские стили */
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #e2f0e8; /* Легкий зеленый/голубой фон для "городского" вида */
+            background-color: #f7f7f7;
             display: flex;
             justify-content: center;
             align-items: flex-start;
             min-height: 100vh;
-            margin: 0;
             padding: 20px;
-            overflow-y: auto;
         }
-
         .game-container {
+            max-width: 420px;
             width: 100%;
-            max-width: 600px;
-            background-color: #ffffff;
-            border-radius: 20px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
-            padding: 30px;
-            text-align: center;
-            border: 6px solid #10b981; /* Мятно-зеленая рамка */
-        }
-
-        .header-section {
-            background-color: #065f46; /* Темно-зеленый */
-            color: white;
-            padding: 15px;
-            border-radius: 12px;
-            margin-bottom: 20px;
-        }
-
-        .balance-display {
-            font-size: 3rem;
-            font-weight: 800;
-            color: #fcd34d; /* Золотой/Янтарный */
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-        }
-
-        .collect-button {
-            background-color: #ef4444; /* Красный для сбора */
-            color: white;
-            padding: 15px 25px;
-            font-size: 1.125rem;
-            font-weight: 700;
-            border-radius: 12px;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 0 #b91c1c;
-            transform: translateY(0);
-        }
-
-        .collect-button:active {
-            box-shadow: 0 2px 0 #b91c1c;
-            transform: translateY(2px);
-        }
-
-        .industry-card {
-            background-color: #f0fdf4; /* Очень светлый зеленый */
-            padding: 15px;
-            border-radius: 12px;
-            margin-bottom: 15px;
-            border: 2px solid #34d399;
-            text-align: left;
-            transition: all 0.3s ease;
-        }
-
-        .industry-card.purchased {
-            background-color: #ccfbf1; /* Бледный бирюзовый */
-        }
-        
-        .industry-card.unpurchased:hover {
-            background-color: #d1fae5;
-        }
-        
-        .progress-bar-container {
-            height: 12px;
-            background-color: #a7f3d0;
-            border-radius: 6px;
+            background: white;
+            border-radius: 1rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            margin-top: 8px;
+            padding: 1.5rem;
+            border: 4px solid #3b82f6;
         }
-
-        .progress-bar {
-            height: 100%;
-            background-color: #059669; /* Насыщенный зеленый */
-            transition: width 0.1s linear;
+        .click-button {
+            transition: all 0.1s;
+            box-shadow: 0 4px 0 0 #1e40af;
         }
-        
-        .manager-toggle.active {
-            background-color: #3b82f6; /* Синий для активного */
-            box-shadow: 0 2px 0 #1d4ed8;
+        .click-button:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px 0 0 #1e40af;
         }
-        
-        .manager-toggle:active {
-            transform: translateY(1px);
-            box-shadow: 0 1px 0 #1d4ed8;
+        .buy-button {
+            transition: all 0.2s;
         }
-        
-        /* Эффект всплывающего дохода */
-        .income-popup {
-            position: fixed;
-            color: #10b981; /* Зеленый */
-            font-size: 28px;
-            font-weight: 800;
-            pointer-events: none;
-            animation: floatup 1.5s ease-out forwards;
-            z-index: 1000;
-            text-shadow: 1px 1px 2px #000;
+        .buy-button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
         }
-
-        @keyframes floatup {
-            0% { transform: translateY(0) scale(1); opacity: 1; }
-            100% { transform: translateY(-70px) scale(0.8); opacity: 0; }
+        .buy-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+            background-color: #6b7280;
+            box-shadow: none;
         }
     </style>
 </head>
 <body>
 
-<div class="game-container">
-    <div id="loading-status" class="text-center p-5 hidden">
-        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-4 border-indigo-500"></div>
-        <p class="mt-3 text-indigo-600 font-semibold">Загрузка данных и аутентификация...</p>
-    </div>
-    <div id="game-ui" class="hidden">
-        <div class="header-section">
-            <h1 class="text-3xl font-extrabold mb-1">TashBoss</h1>
-            <p class="text-sm font-light mb-3">Симулятор управления городом</p>
-            <div class="balance-display" id="score-display">0 BSS</div>
-            <p class="text-xs font-light mt-1">
-                Доход в секунду (пассивный): <span id="auto-income-display" class="font-bold text-yellow-300">0 BSS/с</span>
-            </p>
-        </div>
+<div id="game-app" class="game-container">
+    <h1 class="text-4xl font-extrabold text-center text-blue-700 mb-6">TashBoss Clicker</h1>
 
-        <!-- Кнопка сбора всей прибыли -->
-        <button id="collect-all-button" class="collect-button w-full mb-6" disabled>
-            Собрать Всю Прибыль (0 BSS)
-        </button>
+    <!-- Блок состояния пользователя -->
+    <div class="bg-blue-50 p-4 rounded-xl mb-4 border border-blue-200">
+        <p id="auth-status" class="text-sm font-semibold text-gray-700 mb-1">
+            <span class="inline-block w-3 h-3 bg-red-500 rounded-full mr-2 animate-pulse"></span>
+            <span id="auth-text">Загрузка данных и аутентификация...</span>
+        </p>
+        <p id="user-id-display" class="text-xs text-gray-500 truncate" title="Ваш ID пользователя">
+            ID: <span id="user-id-value">Ожидание...</span>
+        </p>
+    </div>
+
+    <!-- Блок счета -->
+    <div class="bg-white p-6 rounded-xl border-2 border-indigo-500 mb-6 text-center shadow-lg">
+        <p class="text-2xl text-gray-600 font-medium">BSS (Билеты на Социальное Счастье):</p>
+        <p id="score-display" class="text-6xl font-black text-indigo-700 mt-2">0</p>
+        <p id="dps-display" class="text-md text-gray-500 mt-1">Доход в секунду (ДВС): 0</p>
+    </div>
+
+    <!-- Кнопка клика -->
+    <button id="click-button"
+            class="click-button w-full bg-blue-500 text-white p-4 text-2xl font-bold rounded-xl mb-6 shadow-xl hover:bg-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-300 disabled:bg-gray-400"
+            onclick="handleManualClick()" disabled>
+        Ткнуть (BSS +1)
+    </button>
+
+    <!-- Раздел менеджеров -->
+    <div class="bg-gray-100 p-4 rounded-xl">
+        <h2 class="text-xl font-bold text-gray-700 mb-3 border-b pb-2 border-gray-300">Наемные менеджеры</h2>
+
+        <!-- Менеджер 1: Уборка улиц -->
+        <div id="manager-1" class="flex justify-between items-center bg-white p-3 rounded-lg mb-2 shadow-md">
+            <div>
+                <p class="font-semibold text-lg">🧹 Уборка улиц</p>
+                <p class="text-sm text-gray-500">Доход: <span id="manager-1-dps">1</span> ДВС</p>
+                <p class="text-sm text-gray-500">У вас: <span id="manager-1-count">0</span></p>
+            </div>
+            <button id="buy-manager-1-button"
+                    class="buy-button bg-green-500 text-white px-4 py-2 rounded-lg font-bold shadow-md hover:bg-green-600 disabled:bg-gray-500"
+                    onclick="buyManager(1)" disabled>
+                Купить (100 BSS)
+            </button>
+        </div>
         
-        <hr class="my-6 border-gray-200">
-
-        <h2 class="text-2xl font-bold text-gray-800 mb-4">Отрасли (Инвестиции)</h2>
-        <div id="industries-list">
-            <!-- Сюда будут динамически добавляться карточки отраслей -->
+        <!-- Менеджер 2: Ремонт дорог -->
+        <div id="manager-2" class="flex justify-between items-center bg-white p-3 rounded-lg mb-2 shadow-md">
+            <div>
+                <p class="font-semibold text-lg">🚧 Ремонт дорог</p>
+                <p class="text-sm text-gray-500">Доход: <span id="manager-2-dps">10</span> ДВС</p>
+                <p class="text-sm text-gray-500">У вас: <span id="manager-2-count">0</span></p>
+            </div>
+            <button id="buy-manager-2-button"
+                    class="buy-button bg-green-500 text-white px-4 py-2 rounded-lg font-bold shadow-md hover:bg-green-600 disabled:bg-gray-500"
+                    onclick="buyManager(2)" disabled>
+                Купить (1,000 BSS)
+            </button>
         </div>
 
-        <button id="save-button" class="mt-6 p-2 bg-blue-500 text-white text-sm rounded-lg shadow-md hover:bg-blue-600 transition-all active:scale-95" disabled>
-            Сохранить вручную
-        </button>
-        <div id="save-status" class="mt-2 text-xs text-gray-500">Автосохранение: каждые 15 сек.</div>
     </div>
-    
-    <!-- Сообщение об ошибке -->
-    <div id="error-message" class="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded hidden"></div>
+
+    <!-- Модальное окно для сообщений (вместо alert) -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-red-600">Ошибка!</h3>
+            <p id="modal-message" class="text-gray-700 mb-4">Недостаточно BSS.</p>
+            <button onclick="closeModal()" class="w-full bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600">Закрыть</button>
+        </div>
+    </div>
 </div>
 
-
 <script type="module">
-    // Импорт Firebase SDK (требуется для Canvas)
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { 
-        getAuth, 
-        signInAnonymously, 
-        signInWithCustomToken, 
-        onAuthStateChanged 
-    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { 
-        getFirestore, 
-        doc, 
-        setDoc, 
-        onSnapshot 
-    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ CANVAS (MANDATORY) ---
+    // Глобальные переменные, предоставляемые средой Canvas
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
     const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-    // --- НАСТРОЙКИ ИГРЫ И СОСТОЯНИЕ ---
-    const GAME_STATE_DOC_ID = 'tashboss_v1_state';
-    const AUTOSAVE_INTERVAL = 15000; // 15 секунд
+    // Импорты Firebase
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, onSnapshot, setDoc, runTransaction, setLogLevel, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    let db;
-    let auth;
+    // Игровые переменные
+    let app, db, auth;
     let userId = null;
-    let isAuthReady = false;
-    let lastGameLoopTime = Date.now();
-    let totalAutoIncome = 0; // Для отображения общего пассивного дохода
-
-    let gameState = {
+    let isGameReady = false;
+    let gameData = {
         score: 0,
-        industries: {}, // { id: { level: N, lastCollect: timestamp, isManaged: boolean, managerCost: N } }
+        dps: 0,
+        managers: {
+            1: 0,
+            2: 0
+        }
     };
     
-    // Определение отраслей (константа)
-    const INDUSTRIES_DATA = [
-        { id: 'clean', name: 'Уборка улиц', startCost: 100, baseIncome: 1, baseCycleTime: 60, emoji: '🧹', managerCost: 500 },
-        { id: 'utility', name: 'Коммунальные службы', startCost: 300, baseIncome: 3, baseCycleTime: 50, emoji: '💡', managerCost: 1500 },
-        { id: 'transport', name: 'Транспорт', startCost: 1000, baseIncome: 8, baseCycleTime: 45, emoji: '🚌', managerCost: 5000 },
-        { id: 'parks', name: 'Парки и зоны отдыха', startCost: 3000, baseIncome: 20, baseCycleTime: 40, emoji: '🌳', managerCost: 15000 },
-        { id: 'business', name: 'Малый бизнес', startCost: 8000, baseIncome: 50, baseCycleTime: 35, emoji: '☕', managerCost: 40000 },
-        { id: 'factory', name: 'Заводы и фабрики', startCost: 20000, baseIncome: 120, baseCycleTime: 30, emoji: '🏭', managerCost: 100000 },
-        { id: 'airquality', name: 'Качество воздуха', startCost: 50000, baseIncome: 200, baseCycleTime: 25, emoji: '🌬️', managerCost: 250000 },
-        { id: 'itpark', name: 'IT-парк', startCost: 120000, baseIncome: 500, baseCycleTime: 20, emoji: '💻', managerCost: 600000 },
-        { id: 'tourism', name: 'Туризм', startCost: 250000, baseIncome: 1000, baseCycleTime: 15, emoji: '🕌', managerCost: 1250000 },
-        { id: 'international', name: 'Международное сотрудничество', startCost: 1000000, baseIncome: 5000, baseCycleTime: 10, emoji: '🤝', managerCost: 5000000 },
-    ];
-    
-    // --- ЭЛЕМЕНТЫ DOM ---
-    const gameUI = document.getElementById('game-ui');
+    // Конфигурация менеджеров
+    const MANAGER_CONFIG = {
+        1: { name: "Уборка улиц", baseCost: 100, baseDps: 1, countId: 'manager-1-count', buttonId: 'buy-manager-1-button', costText: '100 BSS' },
+        2: { name: "Ремонт дорог", baseCost: 1000, baseDps: 10, countId: 'manager-2-count', buttonId: 'buy-manager-2-button', costText: '1,000 BSS' }
+    };
+
+    // UI элементы
     const scoreDisplay = document.getElementById('score-display');
-    const autoIncomeDisplay = document.getElementById('auto-income-display');
-    const industriesList = document.getElementById('industries-list');
-    const loadingStatus = document.getElementById('loading-status');
-    const errorMessageEl = document.getElementById('error-message');
-    const saveButton = document.getElementById('save-button');
-    const collectAllButton = document.getElementById('collect-all-button');
+    const dpsDisplay = document.getElementById('dps-display');
+    const clickButton = document.getElementById('click-button');
+    const authStatus = document.getElementById('auth-status');
+    const authText = document.getElementById('auth-text');
+    const userIdValue = document.getElementById('user-id-value');
 
-    // --- УТИЛИТЫ ---
-
-    function formatNumber(num) {
-        if (typeof num !== 'number') return '0';
-        num = Math.floor(num);
-        if (num >= 1e12) return (num / 1e12).toFixed(1) + ' T';
-        if (num >= 1e9) return (num / 1e9).toFixed(1) + ' B';
-        if (num >= 1e6) return (num / 1e6).toFixed(1) + ' M';
-        if (num >= 1e3) return (num / 1e3).toFixed(1) + ' K';
-        return num.toFixed(0);
-    }
-    
-    function showError(message) {
-        errorMessageEl.textContent = 'Ошибка: ' + message;
-        errorMessageEl.classList.remove('hidden');
-        setTimeout(() => errorMessageEl.classList.add('hidden'), 5000);
-    }
-    
-    function logMessage(message) {
-        console.log(`[TASHBOSS] ${message}`);
+    // Функция для отображения сообщений
+    function showModal(title, message, isError = true) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-title').className = isError ? 'text-xl font-bold mb-3 text-red-600' : 'text-xl font-bold mb-3 text-green-600';
+        document.getElementById('modal-message').textContent = message;
+        document.getElementById('message-modal').classList.remove('hidden');
+        document.getElementById('message-modal').classList.add('flex');
+        console.log(`[CLICKER] Показано модальное окно: ${title} - ${message}`);
     }
 
-    // --- ФОРМУЛЫ ИГРОВОЙ МЕХАНИКИ ---
-
-    // 1. Расчет характеристик отрасли на текущем уровне
-    function calculateIndustryStats(data, level) {
-        const currentLevel = level || 0;
-        
-        // Уровень 0 - начальное состояние, нет дохода
-        if (currentLevel === 0) {
-            return {
-                nextCost: data.startCost, // Стоимость покупки
-                currentIncome: 0,
-                currentCycle: data.baseCycleTime * 1000,
-            };
-        }
-
-        // Уровень N:
-        // Доход: baseIncome * Level (Линейный рост дохода)
-        const income = data.baseIncome * currentLevel;
-        
-        // Время цикла: baseCycleTime * (1 / (1 + 0.05 * Level)) - Небольшое уменьшение (5% ускорения за уровень)
-        const cycleTimeMs = data.baseCycleTime * 1000 * (1 / (1 + 0.05 * (currentLevel - 1)));
-        
-        // Стоимость следующего уровня: startCost * 1.5 ^ Level
-        // Уровень 1 покупается за startCost
-        // Уровень 2 стоит startCost * 1.5^1
-        const nextCost = Math.floor(data.startCost * Math.pow(1.5, currentLevel));
-        
-        return {
-            nextCost: nextCost,
-            currentIncome: income,
-            currentCycle: Math.max(cycleTimeMs, 5000), // Минимальный цикл 5 секунд
-        };
-    }
-    
-    // 2. Расчет накопленной прибыли
-    function calculateEarnedProfit(data, industryState) {
-        if (industryState.level === 0) return 0;
-        
-        const stats = calculateIndustryStats(data, industryState.level);
-        const now = Date.now();
-        const timeElapsed = now - (industryState.lastCollect || now);
-        
-        // Сколько полных циклов прошло
-        const cyclesCompleted = Math.floor(timeElapsed / stats.currentCycle);
-        
-        if (cyclesCompleted < 1) return 0;
-        
-        const earned = cyclesCompleted * stats.currentIncome;
-        
-        return {
-            earned: earned,
-            cyclesCompleted: cyclesCompleted,
-            timeToNextCycle: stats.currentCycle - (timeElapsed % stats.currentCycle)
-        };
-    }
-    
-    // 3. Расчет общего пассивного дохода (для отображения)
-    function calculateTotalAutoIncome() {
-        totalAutoIncome = 0;
-        INDUSTRIES_DATA.forEach(data => {
-            const state = gameState.industries[data.id];
-            if (state && state.level > 0 && state.isManaged) {
-                const stats = calculateIndustryStats(data, state.level);
-                // Доход в секунду (BSS/с)
-                totalAutoIncome += stats.currentIncome / (stats.currentCycle / 1000); 
-            }
-        });
+    function closeModal() {
+        document.getElementById('message-modal').classList.add('hidden');
+        document.getElementById('message-modal').classList.remove('flex');
     }
 
-    // --- ЛОГИКА FIREBASE И СОХРАНЕНИЯ ---
-
+    /**
+     * Инициализирует Firebase и настраивает аутентификацию.
+     */
     async function initFirebase() {
-        if (!firebaseConfig) {
-            showError('Firebase config не найден.');
-            return;
-        }
-
-        loadingStatus.classList.remove('hidden');
-
+        console.log("[FIREBASE] Инициализация Firebase...");
         try {
-            const app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-
-            if (initialAuthToken) {
-                await signInWithCustomToken(auth, initialAuthToken);
-            } else {
-                await signInAnonymously(auth);
-            }
-
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    userId = user.uid;
-                    isAuthReady = true;
-                    logMessage(`Аутентификация успешна. User ID: ${userId}`);
-                    loadGameState();
-                    saveButton.disabled = false;
-                    
-                    // Запуск автосохранения
-                    setInterval(saveGameState, AUTOSAVE_INTERVAL);
-                    gameUI.classList.remove('hidden');
-                } else {
-                    logMessage('Пользователь не аутентифицирован.');
-                    userId = null;
-                    isAuthReady = false;
-                    loadingStatus.classList.add('hidden');
-                }
-            });
-
-        } catch (e) {
-            showError('Не удалось инициализировать Firebase: ' + e.message);
-        }
-    }
-
-    function getGameStateDocRef() {
-        if (!db || !userId) return null;
-        // Путь для приватных данных
-        const collectionPath = `artifacts/${appId}/users/${userId}/game_data`;
-        return doc(db, collectionPath, GAME_STATE_DOC_ID);
-    }
-
-    function loadGameState() {
-        const docRef = getGameStateDocRef();
-        if (!docRef) return;
-        
-        // Подписываемся на изменения документа
-        onSnapshot(docRef, (docSnap) => {
-            loadingStatus.classList.add('hidden');
+            // Устанавливаем уровень логирования для отладки Firestore
+            setLogLevel('debug');
             
-            if (docSnap.exists()) {
-                const loadedState = docSnap.data();
-                gameState.score = loadedState.score || 0;
-                gameState.industries = loadedState.industries || {};
-                logMessage('Состояние игры загружено/обновлено из Firestore.');
-            } else {
-                logMessage('Новое состояние игры (документ не найден).');
-                // Инициализация стартового счета
-                gameState.score = INDUSTRIES_DATA[0].startCost; // Начинаем с BSS на покупку первой отрасли
-            }
-            
-            // Валидация и инициализация lastCollect для новых игроков
-            INDUSTRIES_DATA.forEach(data => {
-                if (gameState.industries[data.id] && !gameState.industries[data.id].lastCollect) {
-                    // Если отрасль куплена, но нет lastCollect, устанавливаем его в текущее время
-                    gameState.industries[data.id].lastCollect = Date.now();
-                }
-            });
-
-            // Запуск игрового цикла после загрузки
-            gameLoop();
-        }, (error) => {
-            loadingStatus.classList.add('hidden');
-            showError('Ошибка при чтении состояния из Firestore: ' + error.message);
-        });
-    }
-
-    async function saveGameState() {
-        const docRef = getGameStateDocRef();
-        if (!docRef || !isAuthReady) return;
-
-        const statusEl = document.getElementById('save-status');
-        saveButton.disabled = true;
-        statusEl.textContent = 'Сохранение...';
-
-        try {
-            await setDoc(docRef, gameState, { merge: true });
-            statusEl.textContent = `Автосохранение: ${new Date().toLocaleTimeString()} (OK)`;
-        } catch (e) {
-            showError('Ошибка при сохранении: ' + e.message);
-            statusEl.textContent = 'Ошибка сохранения!';
-        } finally {
-            saveButton.disabled = false;
-        }
-    }
-
-    // --- ЛОГИКА ИГРЫ И ВЗАИМОДЕЙСТВИЯ ---
-
-    function buyIndustry(id) {
-        const data = INDUSTRIES_DATA.find(d => d.id === id);
-        if (!data) return;
-
-        // Если отрасль не куплена (level 0), покупаем Level 1
-        let currentState = gameState.industries[id] || { level: 0, isManaged: false, managerCost: data.managerCost };
-        const stats = calculateIndustryStats(data, currentState.level);
-        
-        const cost = stats.nextCost;
-        
-        if (gameState.score >= cost) {
-            gameState.score -= cost;
-            currentState.level += 1;
-            // Устанавливаем время сбора для новой/уровня
-            currentState.lastCollect = Date.now(); 
-
-            gameState.industries[id] = currentState;
-            
-            updateUI();
-            saveGameState(); // Сохраняем после покупки
-            
-            // Если это первая покупка, даем бонус BSS для старта
-            if (currentState.level === 1) {
-                showPopup(`+${formatNumber(data.baseIncome)} BSS`, document.getElementById(`buy-btn-${id}`));
-            }
-        } else {
-            showError(`Недостаточно BSS для покупки ${data.name}. Нужно ${formatNumber(cost)} BSS.`);
-        }
-    }
-    
-    function toggleManager(id) {
-        const data = INDUSTRIES_DATA.find(d => d.id === id);
-        let currentState = gameState.industries[id];
-        if (!currentState || currentState.level === 0) return; // Нельзя нанять менеджера для некупленной отрасли
-
-        if (currentState.isManaged) {
-            // Увольняем (снимаем управление)
-            currentState.isManaged = false;
-        } else {
-            // Нанимаем (включаем управление)
-            const managerCost = data.managerCost;
-            if (gameState.score >= managerCost) {
-                gameState.score -= managerCost;
-                currentState.isManaged = true;
-            } else {
-                showError(`Недостаточно BSS для найма Ответственного. Нужно ${formatNumber(managerCost)} BSS.`);
+            if (Object.keys(firebaseConfig).length === 0) {
+                console.error("[FIREBASE] Конфигурация Firebase пуста. Невозможно инициализировать.");
+                authText.textContent = "Ошибка: Конфигурация Firebase отсутствует.";
                 return;
             }
-        }
-        
-        gameState.industries[id] = currentState;
-        updateUI();
-        saveGameState();
-    }
-    
-    function collectProfit(id, visualElement) {
-        const data = INDUSTRIES_DATA.find(d => d.id === id);
-        let currentState = gameState.industries[id];
-        if (!currentState || currentState.level === 0) return 0;
-        
-        const { earned, cyclesCompleted } = calculateEarnedProfit(data, currentState);
-        
-        if (earned > 0) {
-            gameState.score += earned;
+
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
             
-            // Обновляем время последнего сбора на время, когда был завершен последний цикл
-            const stats = calculateIndustryStats(data, currentState.level);
-            const timeElapsed = Date.now() - currentState.lastCollect;
-            currentState.lastCollect += cyclesCompleted * stats.currentCycle;
+            console.log("[FIREBASE] Приложение и Firestore инициализированы.");
 
-            // Если это ручной сбор, показываем всплывающее окно
-            if (visualElement) {
-                showPopup(`+${formatNumber(earned)} BSS`, visualElement);
-            }
-            
-            // Для менеджера, сброс lastCollect должен быть здесь
-            if (currentState.isManaged) {
-                currentState.lastCollect = Date.now();
-            }
-
-            gameState.industries[id] = currentState;
-            return earned;
-        }
-        return 0;
-    }
-    
-    function collectAllProfit() {
-        if (!isAuthReady) return;
-        
-        let totalCollected = 0;
-        
-        // Вручную собираем прибыль со всех отраслей, где нет менеджера
-        INDUSTRIES_DATA.forEach(data => {
-            const state = gameState.industries[data.id];
-            if (state && state.level > 0 && !state.isManaged) {
-                totalCollected += collectProfit(data.id, collectAllButton);
-            }
-        });
-        
-        if (totalCollected > 0) {
-            updateUI();
-            saveGameState();
-        } else {
-            showError('Нет прибыли для ручного сбора.');
-        }
-    }
-
-    // --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА ---
-
-    function updateUI() {
-        if (!isAuthReady) return;
-
-        const totalManualCollectable = renderIndustries();
-        
-        scoreDisplay.textContent = `${formatNumber(gameState.score)} BSS`;
-        
-        calculateTotalAutoIncome();
-        autoIncomeDisplay.textContent = `${formatNumber(totalAutoIncome.toFixed(2))} BSS/с`;
-
-        // Обновление кнопки "Собрать Все"
-        collectAllButton.textContent = `Собрать Всю Прибыль (${formatNumber(totalManualCollectable)} BSS)`;
-        collectAllButton.disabled = totalManualCollectable === 0;
-    }
-    
-    // Рендеринг всех карточек отраслей
-    function renderIndustries() {
-        industriesList.innerHTML = '';
-        let totalManualCollectable = 0;
-
-        INDUSTRIES_DATA.forEach(data => {
-            let currentState = gameState.industries[data.id] || { level: 0, isManaged: false, managerCost: data.managerCost || 0 };
-            const level = currentState.level;
-            const isPurchased = level > 0;
-            const stats = calculateIndustryStats(data, level);
-            
-            let collectableProfit = 0;
-            let progressWidth = 0;
-            
-            if (isPurchased) {
-                const profitInfo = calculateEarnedProfit(data, currentState);
-                collectableProfit = profitInfo.earned;
-                
-                // Прогресс бар
-                const timeElapsed = Date.now() - currentState.lastCollect;
-                const timeInCurrentCycle = timeElapsed % stats.currentCycle;
-                progressWidth = (timeInCurrentCycle / stats.currentCycle) * 100;
-                
-                if (!currentState.isManaged) {
-                    totalManualCollectable += collectableProfit;
+            // Слушатель состояния аутентификации
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    console.log(`[FIREBASE] Аутентификация успешна. UID: ${userId}`);
+                    authText.textContent = "Подключено";
+                    authStatus.querySelector('span').classList.replace('bg-red-500', 'bg-green-500');
+                    userIdValue.textContent = userId;
+                    
+                    // Как только пользователь аутентифицирован, загружаем данные игры
+                    loadGameData();
+                } else {
+                    // Попытка входа
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                            console.log("[FIREBASE] Вход с Custom Token.");
+                        } else {
+                            // Если токен не предоставлен, вход анонимно
+                            await signInAnonymously(auth);
+                            console.log("[FIREBASE] Анонимный вход.");
+                        }
+                    } catch (error) {
+                        console.error("[FIREBASE] Ошибка аутентификации:", error);
+                        authText.textContent = "Ошибка входа. См. консоль.";
+                        authStatus.querySelector('span').classList.replace('bg-red-500', 'bg-red-700');
+                    }
                 }
-            }
+            });
 
-            const card = document.createElement('div');
-            card.id = `industry-card-${data.id}`;
-            card.className = `industry-card ${isPurchased ? 'purchased' : 'unpurchased'}`;
-            
-            if (!isPurchased) {
-                // Карточка для покупки (Level 1)
-                card.innerHTML = `
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <h3 class="font-extrabold text-xl text-gray-800">${data.emoji} ${data.name}</h3>
-                            <p class="text-sm text-gray-500">${data.description}</p>
-                        </div>
-                        <button id="buy-btn-${data.id}" 
-                            class="p-3 bg-green-500 text-white font-semibold rounded-lg shadow-md transition-all active:scale-95 disabled:opacity-50"
-                            ${gameState.score < stats.nextCost ? 'disabled' : ''}>
-                            Купить (Lvl 1) за ${formatNumber(stats.nextCost)} BSS
-                        </button>
-                    </div>
-                `;
-            } else {
-                // Карточка для управления и улучшения
-                const isManaged = currentState.isManaged;
-                
-                card.innerHTML = `
-                    <div class="flex justify-between items-center mb-2">
-                        <h3 class="font-extrabold text-xl text-gray-900">${data.emoji} ${data.name} <span class="text-lg text-indigo-600">(Lvl ${level})</span></h3>
-                        <span class="text-sm font-semibold text-gray-500">${stats.currentIncome} BSS / ${Math.ceil(stats.currentCycle / 1000)} сек.</span>
-                    </div>
-                    
-                    <div class="progress-bar-container mb-3">
-                        <div class="progress-bar" style="width: ${progressWidth}%;"></div>
-                    </div>
-                    
-                    <div class="grid grid-cols-3 gap-3">
-                        <!-- Кнопка сбора прибыли -->
-                        <button id="collect-btn-${data.id}" 
-                            class="p-3 font-semibold rounded-lg transition-all active:scale-95 col-span-1 
-                            ${isManaged ? 'bg-gray-400 text-gray-700 cursor-not-allowed' : 'bg-red-500 text-white shadow-md hover:bg-red-600'}"
-                            ${collectableProfit === 0 || isManaged ? 'disabled' : ''}>
-                            Собрать (${formatNumber(collectableProfit)} BSS)
-                        </button>
-
-                        <!-- Кнопка найма/увольнения Ответственного -->
-                        <button id="manager-btn-${data.id}" 
-                            class="manager-toggle p-3 font-semibold rounded-lg transition-all active:scale-95 col-span-1 shadow-md
-                            ${isManaged ? 'active bg-blue-500 text-white hover:bg-blue-600' : 'bg-yellow-400 text-gray-800 hover:bg-yellow-500'}"
-                            ${!isManaged && gameState.score < data.managerCost ? 'disabled' : ''}>
-                            ${isManaged ? 'Уволить (Автоматически)' : `Нанять Отв. (${formatNumber(data.managerCost)} BSS)`}
-                        </button>
-
-                        <!-- Кнопка улучшения уровня -->
-                        <button id="upgrade-btn-${data.id}" 
-                            class="p-3 bg-green-500 text-white font-semibold rounded-lg shadow-md transition-all active:scale-95 col-span-1 disabled:opacity-50"
-                            ${gameState.score < stats.nextCost ? 'disabled' : ''}>
-                            Улучшить (Lvl ${level + 1}) за ${formatNumber(stats.nextCost)} BSS
-                        </button>
-                    </div>
-                `;
-            }
-            
-            industriesList.appendChild(card);
-
-            // Добавление обработчиков событий
-            if (!isPurchased) {
-                document.getElementById(`buy-btn-${data.id}`).addEventListener('click', () => buyIndustry(data.id));
-            } else {
-                document.getElementById(`collect-btn-${data.id}`).addEventListener('click', (e) => {
-                    e.stopPropagation(); 
-                    collectProfit(data.id, e.target);
-                    updateUI(); // Обновляем UI после сбора
-                    saveGameState();
-                });
-                document.getElementById(`manager-btn-${data.id}`).addEventListener('click', () => toggleManager(data.id));
-                document.getElementById(`upgrade-btn-${data.id}`).addEventListener('click', () => buyIndustry(data.id));
-            }
-        });
-        
-        return totalManualCollectable;
+        } catch (error) {
+            console.error("[FIREBASE] Критическая ошибка инициализации:", error);
+            authText.textContent = `Критическая ошибка: ${error.message}`;
+        }
     }
 
-    // Анимация всплывающего дохода
-    function showPopup(text, visualElement) {
-        if (!visualElement) return;
-
-        const rect = visualElement.getBoundingClientRect();
-        
-        const popupEl = document.createElement('div');
-        popupEl.textContent = text;
-        popupEl.classList.add('income-popup');
-        
-        // Позиционирование
-        popupEl.style.left = `${rect.left + rect.width / 2}px`;
-        popupEl.style.top = `${rect.top}px`;
-        
-        // Добавление к body
-        document.body.appendChild(popupEl);
-
-        // Удаление элемента после завершения анимации
-        popupEl.addEventListener('animationend', () => {
-            popupEl.remove();
-        });
-    }
-
-    // --- ГЛАВНЫЙ ИГРОВОЙ ЦИКЛ (60 FPS) ---
-    function gameLoop() {
-        if (!isAuthReady) {
-            requestAnimationFrame(gameLoop);
+    /**
+     * Загружает данные игры из Firestore и настраивает onSnapshot.
+     */
+    function loadGameData() {
+        if (!db || !userId) {
+            console.warn("[GAME] DB или userId не готовы для загрузки данных.");
             return;
         }
 
-        const now = Date.now();
-        const deltaTime = (now - lastGameLoopTime) / 1000; // Delta time в секундах
-        lastGameLoopTime = now;
+        const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
         
-        let shouldSave = false;
-        
-        // 1. Автоматический сбор прибыли менеджерами
-        INDUSTRIES_DATA.forEach(data => {
-            let state = gameState.industries[data.id];
-            if (state && state.level > 0 && state.isManaged) {
-                const collected = collectProfit(data.id);
-                if (collected > 0) {
-                    showPopup(`+${formatNumber(collected)} BSS`, document.getElementById(`industry-card-${data.id}`));
-                    shouldSave = true;
-                }
-            }
-        });
+        console.log(`[GAME] Настройка слушателя данных для пути: ${gameDocRef.path}`);
 
-        // 2. Обновление интерфейса и прогресс-баров
-        updateUI();
+        // Слушатель в реальном времени
+        onSnapshot(gameDocRef, (docSnapshot) => {
+            if (docSnapshot.exists()) {
+                const data = docSnapshot.data();
+                gameData.score = data.score || 0;
+                gameData.dps = data.dps || 0;
+                gameData.managers = data.managers || { 1: 0, 2: 0 };
+                console.log("[GAME] Данные успешно загружены/обновлены. Счет:", gameData.score);
+            } else {
+                console.log("[GAME] Документ не существует. Установка начального состояния.");
+                // Создаем начальный документ, если его нет
+                setDoc(gameDocRef, { 
+                    score: 0, 
+                    dps: 0, 
+                    managers: { 1: 0, 2: 0 },
+                    lastUpdate: serverTimestamp() 
+                }, { merge: true }).catch(e => console.error("[FIREBASE] Ошибка установки начального документа:", e));
+            }
+            
+            // Обновляем UI после загрузки/обновления
+            updateUI();
+            
+            // Готовность игры
+            if (!isGameReady) {
+                isGameReady = true;
+                clickButton.disabled = false;
+                console.log("[GAME] Игра готова к взаимодействию!");
+            }
+        }, (error) => {
+            console.error("[FIREBASE] Ошибка получения данных onSnapshot:", error);
+            authText.textContent = "Ошибка загрузки данных. См. консоль.";
+        });
+    }
+
+    /**
+     * Обновляет все элементы пользовательского интерфейса.
+     */
+    function updateUI() {
+        scoreDisplay.textContent = formatNumber(gameData.score);
+        dpsDisplay.textContent = `Доход в секунду (ДВС): ${formatNumber(gameData.dps)}`;
         
-        // 3. Сохранение, если произошло авто-событие
-        if (shouldSave) {
-            saveGameState();
+        // Обновление менеджеров
+        for (const id in MANAGER_CONFIG) {
+            const config = MANAGER_CONFIG[id];
+            const count = gameData.managers[id] || 0;
+            const cost = config.baseCost; // В этой версии стоимость не растет
+
+            document.getElementById(config.countId).textContent = formatNumber(count);
+            document.getElementById(config.buttonId).textContent = `Купить (${config.costText})`;
+            
+            // Включаем/отключаем кнопку
+            const button = document.getElementById(config.buttonId);
+            if (isGameReady) {
+                button.disabled = gameData.score < cost;
+            }
+        }
+    }
+    
+    /**
+     * Форматирует число с разделителями (для больших чисел).
+     */
+    function formatNumber(num) {
+        if (num === null || num === undefined) return '0';
+        return num.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+    }
+
+    /**
+     * Обрабатывает ручной клик.
+     */
+    function handleManualClick() {
+        if (!isGameReady) {
+            showModal("Ошибка", "Игра еще не готова. Дождитесь загрузки данных.");
+            console.log("[CLICKER] Попытка клика до готовности игры.");
+            return;
         }
 
-        requestAnimationFrame(gameLoop);
+        const amount = 1;
+        gameData.score += amount;
+        updateScoreInFirestore(amount, 0).catch(e => console.error("[FIREBASE] Ошибка сохранения клика:", e));
+        
+        // Визуальный эффект
+        scoreDisplay.classList.add('scale-110');
+        setTimeout(() => scoreDisplay.classList.remove('scale-110'), 50);
+    }
+    
+    /**
+     * Обрабатывает покупку менеджера.
+     */
+    async function buyManager(managerId) {
+        if (!isGameReady) {
+            showModal("Ошибка", "Игра еще не готова. Дождитесь загрузки данных.");
+            return;
+        }
+        
+        const id = managerId.toString();
+        const config = MANAGER_CONFIG[id];
+        const cost = config.baseCost; // Стоимость пока статична
+        
+        console.log(`[CLICKER] Попытка покупки ${config.name}. Текущий счет: ${gameData.score}, Цена: ${cost}`);
+
+        if (gameData.score < cost) {
+            showModal("Недостаточно BSS", `Для покупки "${config.name}" требуется ${formatNumber(cost)} BSS.`);
+            return;
+        }
+
+        const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                const docSnapshot = await transaction.get(gameDocRef);
+                if (!docSnapshot.exists()) {
+                    throw "Документ игрового состояния не существует!";
+                }
+
+                const currentData = docSnapshot.data();
+                const currentScore = currentData.score || 0;
+                const currentDps = currentData.dps || 0;
+                const currentManagers = currentData.managers || { 1: 0, 2: 0 };
+                const currentManagerCount = currentManagers[id] || 0;
+
+                if (currentScore < cost) {
+                    // Это может случиться, если другой клик/менеджер обновил счет
+                    throw "Недостаточно средств (Транзакция отменена).";
+                }
+
+                // Обновляем данные
+                const newScore = currentScore - cost;
+                const newDps = currentDps + config.baseDps;
+                const newManagers = { ...currentManagers, [id]: currentManagerCount + 1 };
+                
+                // Записываем обновленные данные
+                transaction.set(gameDocRef, {
+                    score: newScore,
+                    dps: newDps,
+                    managers: newManagers,
+                    lastUpdate: serverTimestamp()
+                });
+                
+                console.log(`[CLICKER] Транзакция покупки ${config.name} завершена.`);
+                showModal("Покупка совершена!", `Вы успешно наняли "${config.name}". Ваш ДВС увеличен на ${config.baseDps}.`, false);
+            });
+        } catch (e) {
+            console.error("[FIREBASE] Ошибка транзакции покупки:", e);
+            if (typeof e === 'string' && e.includes("Недостаточно средств")) {
+                showModal("Ошибка", "Недостаточно средств. Попробуйте кликнуть еще.");
+            } else {
+                showModal("Ошибка сохранения", `Не удалось купить: ${e.message || e}.`);
+            }
+        }
     }
 
+    /**
+     * Сохраняет изменения счета и DPS в Firestore.
+     */
+    async function updateScoreInFirestore(scoreChange, dpsChange) {
+        if (!db || !userId) return;
 
-    // --- ТОЧКА ВХОДА ---
-    window.onload = function () {
+        const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
+
+        try {
+            await setDoc(gameDocRef, {
+                score: gameData.score,
+                dps: gameData.dps,
+                managers: gameData.managers,
+                lastUpdate: serverTimestamp()
+            }, { merge: true });
+            // console.log("[FIREBASE] Данные сохранены.");
+        } catch (e) {
+            console.error("[FIREBASE] Ошибка сохранения данных:", e);
+        }
+    }
+
+    /**
+     * Главный цикл игры для автоматического дохода (DPS).
+     */
+    function gameLoop() {
+        if (isGameReady && gameData.dps > 0) {
+            // Добавляем доход за 1 секунду
+            const income = gameData.dps;
+            gameData.score += income;
+            updateUI(); // Обновляем UI немедленно
+            
+            // Сохраняем данные в Firestore
+            updateScoreInFirestore(income, 0).catch(e => console.error("[FIREBASE] Ошибка сохранения DPS:", e));
+        }
+        // Запускаем цикл снова через 1 секунду
+        setTimeout(gameLoop, 1000); 
+    }
+
+    // Инициализация при загрузке
+    window.onload = function() {
         initFirebase();
-        
-        // Обработчик кнопки "Собрать Все"
-        collectAllButton.addEventListener('click', collectAllProfit);
-        
-        // Обработчик ручного сохранения
-        saveButton.addEventListener('click', saveGameState);
-    }
-
+        gameLoop(); // Запускаем цикл DPS
+    };
 </script>
 
 </body>
