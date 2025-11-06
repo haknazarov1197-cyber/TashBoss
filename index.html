@@ -9,6 +9,8 @@
     <!-- Установка шрифта Inter -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        
+        /* Основные стили для центрирования и фона */
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f7f7f7;
@@ -27,7 +29,12 @@
             overflow: hidden;
             padding: 1.5rem;
             border: 4px solid #3b82f6;
+            /* Начинаем игру скрытой, чтобы показать загрузчик */
+            opacity: 0;
+            transition: opacity 0.5s;
         }
+        
+        /* Стили для кликабельных элементов */
         .click-button {
             transition: all 0.1s;
             box-shadow: 0 4px 0 0 #1e40af;
@@ -49,9 +56,46 @@
             background-color: #6b7280;
             box-shadow: none;
         }
+        
+        /* Стили для полноэкранного загрузчика */
+        #full-screen-loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #ffffff; /* Белый фон вместо черного */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.5s ease;
+        }
+        .loader-spinner {
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #3b82f6;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
+
+<!-- ПОЛНОЭКРАННЫЙ ЗАГРУЗЧИК -->
+<div id="full-screen-loader">
+    <div class="loader-spinner"></div>
+    <p class="text-xl font-semibold text-gray-700">Инициализация и подключение к базе данных...</p>
+    <p class="text-sm text-gray-500 mt-2">Пожалуйста, подождите.</p>
+</div>
+<!-- КОНЕЦ ЗАГРУЗЧИКА -->
 
 <div id="game-app" class="game-container">
     <h1 class="text-4xl font-extrabold text-center text-blue-700 mb-6">TashBoss Clicker</h1>
@@ -156,6 +200,8 @@
     };
 
     // UI элементы
+    const gameApp = document.getElementById('game-app');
+    const loader = document.getElementById('full-screen-loader');
     const scoreDisplay = document.getElementById('score-display');
     const dpsDisplay = document.getElementById('dps-display');
     const clickButton = document.getElementById('click-button');
@@ -179,6 +225,26 @@
     }
 
     /**
+     * Завершает процесс загрузки и показывает игру.
+     */
+    function finishLoading() {
+        isGameReady = true;
+        clickButton.disabled = false;
+        
+        // Плавное скрытие загрузчика
+        loader.style.opacity = '0';
+        loader.addEventListener('transitionend', () => {
+            loader.style.display = 'none';
+        }, { once: true });
+        
+        // Плавное появление игры
+        gameApp.style.opacity = '1';
+
+        console.log("[GAME] Игра готова к взаимодействию! Загрузчик скрыт.");
+    }
+
+
+    /**
      * Инициализирует Firebase и настраивает аутентификацию.
      */
     async function initFirebase() {
@@ -190,6 +256,7 @@
             if (Object.keys(firebaseConfig).length === 0) {
                 console.error("[FIREBASE] Конфигурация Firebase пуста. Невозможно инициализировать.");
                 authText.textContent = "Ошибка: Конфигурация Firebase отсутствует.";
+                finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
                 return;
             }
 
@@ -225,6 +292,7 @@
                         console.error("[FIREBASE] Ошибка аутентификации:", error);
                         authText.textContent = "Ошибка входа. См. консоль.";
                         authStatus.querySelector('span').classList.replace('bg-red-500', 'bg-red-700');
+                        finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
                     }
                 }
             });
@@ -232,6 +300,7 @@
         } catch (error) {
             console.error("[FIREBASE] Критическая ошибка инициализации:", error);
             authText.textContent = `Критическая ошибка: ${error.message}`;
+            finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
         }
     }
 
@@ -270,15 +339,14 @@
             // Обновляем UI после загрузки/обновления
             updateUI();
             
-            // Готовность игры
+            // Если игра еще не готова, завершаем загрузку
             if (!isGameReady) {
-                isGameReady = true;
-                clickButton.disabled = false;
-                console.log("[GAME] Игра готова к взаимодействию!");
+                finishLoading();
             }
         }, (error) => {
             console.error("[FIREBASE] Ошибка получения данных onSnapshot:", error);
             authText.textContent = "Ошибка загрузки данных. См. консоль.";
+            finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
         });
     }
 
@@ -296,7 +364,7 @@
             const cost = config.baseCost; // В этой версии стоимость не растет
 
             document.getElementById(config.countId).textContent = formatNumber(count);
-            document.getElementById(config.buttonId).textContent = `Купить (${config.costText})`;
+            // document.getElementById(config.buttonId).textContent = `Купить (${config.costText})`; // Оставим это статичным
             
             // Включаем/отключаем кнопку
             const button = document.getElementById(config.buttonId);
@@ -326,6 +394,7 @@
 
         const amount = 1;
         gameData.score += amount;
+        updateUI(); // Обновляем UI немедленно для ощущения отклика
         updateScoreInFirestore(amount, 0).catch(e => console.error("[FIREBASE] Ошибка сохранения клика:", e));
         
         // Визуальный эффект
@@ -364,18 +433,17 @@
 
                 const currentData = docSnapshot.data();
                 const currentScore = currentData.score || 0;
-                const currentDps = currentData.dps || 0;
                 const currentManagers = currentData.managers || { 1: 0, 2: 0 };
-                const currentManagerCount = currentManagers[id] || 0;
 
-                if (currentScore < cost) {
-                    // Это может случиться, если другой клик/менеджер обновил счет
+                // Проверяем счет еще раз на уровне базы данных
+                if ((currentData.score || 0) < cost) {
                     throw "Недостаточно средств (Транзакция отменена).";
                 }
 
                 // Обновляем данные
-                const newScore = currentScore - cost;
-                const newDps = currentDps + config.baseDps;
+                const newScore = (currentData.score || 0) - cost;
+                const newDps = (currentData.dps || 0) + config.baseDps;
+                const currentManagerCount = currentManagers[id] || 0;
                 const newManagers = { ...currentManagers, [id]: currentManagerCount + 1 };
                 
                 // Записываем обновленные данные
@@ -384,23 +452,24 @@
                     dps: newDps,
                     managers: newManagers,
                     lastUpdate: serverTimestamp()
-                });
+                }, { merge: true });
                 
                 console.log(`[CLICKER] Транзакция покупки ${config.name} завершена.`);
                 showModal("Покупка совершена!", `Вы успешно наняли "${config.name}". Ваш ДВС увеличен на ${config.baseDps}.`, false);
             });
         } catch (e) {
             console.error("[FIREBASE] Ошибка транзакции покупки:", e);
-            if (typeof e === 'string' && e.includes("Недостаточно средств")) {
+            const errorMessage = (typeof e === 'string') ? e : (e.message || 'Неизвестная ошибка.');
+            if (errorMessage.includes("Недостаточно средств")) {
                 showModal("Ошибка", "Недостаточно средств. Попробуйте кликнуть еще.");
             } else {
-                showModal("Ошибка сохранения", `Не удалось купить: ${e.message || e}.`);
+                showModal("Ошибка сохранения", `Не удалось купить: ${errorMessage}`);
             }
         }
     }
 
     /**
-     * Сохраняет изменения счета и DPS в Firestore.
+     * Сохраняет изменения счета и DPS в Firestore (используется для кликов и DPS).
      */
     async function updateScoreInFirestore(scoreChange, dpsChange) {
         if (!db || !userId) return;
@@ -408,13 +477,13 @@
         const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
 
         try {
+            // Используем setDoc с merge: true, чтобы обновить данные
             await setDoc(gameDocRef, {
-                score: gameData.score,
+                score: gameData.score, // Мы уже обновили gameData локально
                 dps: gameData.dps,
                 managers: gameData.managers,
                 lastUpdate: serverTimestamp()
             }, { merge: true });
-            // console.log("[FIREBASE] Данные сохранены.");
         } catch (e) {
             console.error("[FIREBASE] Ошибка сохранения данных:", e);
         }
