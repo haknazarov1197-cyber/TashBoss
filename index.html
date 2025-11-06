@@ -105,9 +105,8 @@
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Глобальные Настройки ---
-        // Жестко заданный (фейковый) config для инициализации Firebase Client SDK
-        // ВАЖНО: Project ID должен совпадать с тем, что в ключе сервисного аккаунта на бэкенде.
-        const firebaseConfig = { projectId: "tashboss-clicker-app" }; 
+        // ИСПРАВЛЕНО: Project ID должен соответствовать ключу сервисного аккаунта.
+        const firebaseConfig = { projectId: "tashboss-1bd35" }; 
         const API_BASE_URL = window.location.origin;
 
         // --- DOM Элементы ---
@@ -134,55 +133,23 @@
 
         /**
          * 2. Запрашивает Firebase Custom Token у бэкенда.
-         * @param {string} telegramUserId - ID пользователя Telegram.
-         * @returns {Promise<string | null>} Токен или null в случае ошибки.
          */
-        async function fetchCustomToken(telegramUserId) {
+        async function fetchInitialIdToken() {
             try {
-                statusMessage.textContent = "Получение токена аутентификации (шаг 2/4)...";
-                // Используем fetch для обмена Telegram ID на Firebase Custom Token
-                const response = await fetch(`${API_BASE_URL}/auth-token`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telegram_user_id: telegramUserId })
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    return data.token; // Custom Token (строка)
-                }
-                
-                const errorData = await response.json().catch(() => ({ detail: 'Неизвестная ошибка сервера' }));
-                throw new Error(`Ошибка HTTP: ${response.status}. ${errorData.detail}`);
-
-            } catch (error) {
-                console.error("Failed to fetch custom token:", error);
-                statusMessage.textContent = `Ошибка: Не удалось получить токен. ${error.message}`;
-                return null;
-            }
-        }
-
-        /**
-         * 3. Инициализирует Firebase и выполняет вход.
-         */
-        async function initializeAppAndAuth(customToken) {
-            try {
-                statusMessage.textContent = "Инициализация Firebase (шаг 3/4)...";
-                
+                statusMessage.textContent = "Инициализация Firebase (шаг 2/3)...";
                 const app = initializeApp(firebaseConfig);
                 const authClient = getAuth(app);
                 
-                statusMessage.textContent = "Вход в систему (шаг 4/4)...";
-
-                // Вход с помощью Custom Token
-                const userCredential = await signInWithCustomToken(authClient, customToken);
+                statusMessage.textContent = "Вход в систему (шаг 3/3 - Анонимно)...";
+                
+                // Вход анонимно для получения UID, который мы затем будем использовать в API
+                const userCredential = await authClient.signInAnonymously();
                 
                 const userUID = userCredential.user.uid;
-                console.log(`✅ Успешный вход в Firebase. UID: ${userUID}`);
+                console.log(`✅ Успешный анонимный вход в Firebase. UID: ${userUID}`);
                 
                 // Получаем ID Token, который будем использовать для всех запросов к API
-                // ID Token будет автоматически обновляться Firebase SDK при необходимости
-                const idToken = await getIdToken(userCredential.user);
+                const idToken = await userCredential.user.getIdToken();
 
                 // Вызываем глобальную функцию в app.js для запуска основной логики игры
                 if (window.initAppAfterAuth) {
@@ -199,25 +166,18 @@
                 window.Telegram.WebApp.MainButton.setText("Закрыть игру").show().onClick(() => {
                     window.Telegram.WebApp.close();
                 });
-
+                
             } catch (error) {
                 console.error("Firebase initialization or sign-in failed:", error);
-                statusMessage.textContent = `Ошибка: Не удалось войти в Firebase. ${error.message}`;
+                // Это может быть причиной 404, если токен не получен
+                statusMessage.textContent = `Ошибка: Не удалось войти в Firebase. Пожалуйста, проверьте консоль.`;
                 statusMessage.classList.remove('hidden');
             }
         }
         
         // --- Главная функция инициализации ---
         async function main() {
-            const telegramUserId = getTelegramUserId();
-
-            if (!telegramUserId) return;
-
-            const customToken = await fetchCustomToken(telegramUserId);
-            
-            if (customToken) {
-                await initializeAppAndAuth(customToken);
-            }
+            await fetchInitialIdToken();
         }
         
         // Запускаем приложение при загрузке DOM
