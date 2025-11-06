@@ -5,10 +5,9 @@ let gameState = null;
 let authToken = null; 
 let currentUserId = null;
 
-// !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: БАЗОВЫЙ URL API !!!
-// Используем window.location.origin, так как Render обслуживает и фронтенд, и API
-// API находится по пути /api
-const BASE_API_URL = `${window.location.origin}/api`; 
+// ИСПРАВЛЕНО: Устанавливаем базовый URL сервиса (без /api)
+const BASE_URL = 'https://tashboss.onrender.com'; 
+const API_PREFIX = '/api';
 
 // --- Константы UI (должны совпадать с бэкендом) ---
 const SECTORS_CONFIG_FRONTEND = {
@@ -106,7 +105,7 @@ function updateUI() {
         const nextLevelCost = calculateNextLevelCost(sectorId, currentLevel);
 
         sectorElement.querySelector('.sector-level').textContent = `Уровень: ${currentLevel}`;
-        sectorElement.querySelector('.sector-income').textContent = `+${config.passive_income.toFixed(2)} BC/сек`;
+        sectorElement.querySelector('.sector-income').textContent = `+${(config.passive_income * (currentLevel + 1)).toFixed(2)} BC/сек`;
 
         const buyButton = sectorElement.querySelector('.buy-button');
         buyButton.textContent = `Купить след. (${formatter.format(nextLevelCost)} BC)`;
@@ -136,6 +135,11 @@ function updateUI() {
 // --- API Запросы с Аутентификацией ---
 
 async function apiCall(endpoint, method = 'POST', body = null) {
+    // УПРОЩЕНО: endpoint должен быть, например, '/load_state'.
+    // Полный URL будет BASE_URL + API_PREFIX + endpoint, например, 
+    // https://tashboss.onrender.com/api/load_state
+    const fullUrl = `${BASE_URL}${API_PREFIX}${endpoint}`;
+
     if (!authToken) {
         showTemporaryMessage('Ошибка: Пользователь не аутентифицирован. Перезапустите WebApp.', true);
         return null;
@@ -154,7 +158,7 @@ async function apiCall(endpoint, method = 'POST', body = null) {
     }
 
     try {
-        const response = await fetch(`${BASE_API_URL}${endpoint}`, config);
+        const response = await fetch(fullUrl, config);
         const data = await response.json();
 
         if (!response.ok) {
@@ -175,7 +179,7 @@ async function apiCall(endpoint, method = 'POST', body = null) {
 // --- Функции Игры ---
 
 async function loadGameState() {
-    // Вызываем API для загрузки состояния
+    // Вызываем API для загрузки состояния. Обратите внимание на префикс '/'
     const data = await apiCall('/load_state'); 
     if (data) {
         gameState = data;
@@ -218,12 +222,12 @@ async function handleBuySector(sectorId) {
     const data = await apiCall('/buy_sector', 'POST', { sector_id: sectorId });
     
     if (data) {
+        gameState = data;
+        updateUI();
+        
         if (data.purchase_successful) {
-            gameState = data;
-            updateUI();
             showTemporaryMessage(`✅ Покупка успешна! Новый уровень ${gameState.sectors[sectorId]}.`);
         } else {
-            // Если баланс не прошел проверку на бэкенде (должно быть редко)
             showTemporaryMessage(`❌ Недостаточно средств для покупки!`, true);
         }
 
@@ -255,7 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
         sectorsContainer.appendChild(sectorCard);
 
-        sectorCard.querySelector('.buy-button').addEventListener('click', () => handleBuySector(key));
+        sectorCard.querySelector('.buy-button').addEventListener('click', (e) => handleBuySector(key));
     });
 
     // 2. Установка обработчиков основных событий
