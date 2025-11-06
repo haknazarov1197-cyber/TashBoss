@@ -4,6 +4,13 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
+# FastAPI и инструментыimport os
+import sys
+import json
+import logging
+import httpx # Используем httpx для асинхронных HTTP-запросов к Telegram API
+from datetime import datetime, timedelta, timezone
+
 # FastAPI и инструменты
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +36,8 @@ if not logger.handlers:
 # --- Глобальные переменные ---
 FIREBASE_APP = None
 DB_CLIENT: Client | None = None
-APP_ID = "tashboss-clicker-app" # Идентификатор проекта/приложения
+APP_ID = "tashboss-1bd35" # ИДЕНТИФИКАТОР ПРОЕКТА, СООТВЕТСТВУЮЩИЙ FIREBASE KEY
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 # --- Конфигурация Игры ---
 SECTORS_CONFIG = {
@@ -53,20 +61,28 @@ class GameState(BaseModel):
     purchase_successful: bool = False
     collected_amount: float = 0.0
 
+# Схемы для Webhook
+class TelegramMessage(BaseModel):
+    text: str | None = None
+    chat: dict
+    from_user: dict | None = None
+
+class TelegramUpdate(BaseModel):
+    update_id: int
+    message: TelegramMessage | None = None
+
 # --- Инициализация Firebase ---
 
 def init_firebase():
     """Инициализирует Firebase Admin SDK и клиента Firestore."""
     global FIREBASE_APP, DB_CLIENT
     
-    # КЛЮЧ: Используем надежную очистку
     key_string = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
     if not key_string:
         logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная окружения FIREBASE_SERVICE_ACCOUNT_KEY отсутствует.")
         sys.exit(1)
         
     try:
-        # Очистка: удаляем внешние кавычки и все символы новой строки/возврата каретки
         cleaned_key_string = key_string.strip().strip("'\"").replace('\n', '').replace('\r', '')
         service_account_info = json.loads(cleaned_key_string)
 
@@ -88,7 +104,6 @@ def init_firebase():
 app = FastAPI(title="TashBoss Clicker API")
 
 # 1. CORS Middleware (КРИТИЧНО для Telegram WebApp)
-# Разрешаем все, чтобы избежать проблем с доменами Telegram
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -98,9 +113,53 @@ app.add_middleware(
 )
 
 # 2. Обслуживание статических файлов (index.html, app.js)
-# Сначала монтируем статические файлы (app.js)
 app.mount("/app.js", StaticFiles(directory=".", html=False), name="app_js")
 app.mount("/favicon.ico", StaticFiles(directory=".", html=False), name="favicon")
+
+# --- Утилиты Telegram ---
+
+def get_base_url(request: Request) -> str:
+    """Определяет базовый URL для WebApp (нужен для кнопки)."""
+    # Render предоставляет правильный публичный URL
+    host = request.headers.get("X-Forwarded-Host") or request.url.netloc
+    scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
+    return f"{scheme}://{host}"
+
+async def send_telegram_message(chat_id: int, text: str, web_app_url: str):
+    """Отправляет сообщение с кнопкой WebApp."""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("❌ TELEGRAM_BOT_TOKEN не установлен. Не могу отправить сообщение.")
+        return
+
+    # Клавиатура с кнопкой WebApp
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🚀 Запустить TashBoss Clicker",
+                    "web_app": {"url": web_app_url}
+                }
+            ]
+        ]
+    }
+    
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": reply_markup,
+        "parse_mode": "Markdown"
+    }
+
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            response = await client.post(api_url, json=payload)
+            response.raise_for_status()
+            logger.info(f"✅ Сообщение Telegram отправлено в чат {chat_id}.")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"❌ Ошибка HTTP при отправке сообщения Telegram: {e.response.text}")
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка при отправке сообщения Telegram: {e}")
 
 # --- Аутентификация: Зависимость FastAPI ---
 
@@ -117,7 +176,6 @@ async def get_auth_data(request: Request) -> str:
     token = auth_header.split(" ")[1]
     
     try:
-        # Проверка токена с помощью Firebase Admin SDK
         decoded_token = auth.verify_id_token(token)
         uid = decoded_token.get('uid')
         return uid
@@ -144,18 +202,16 @@ def calculate_passive_income(game_data: dict) -> tuple[float, datetime]:
     Рассчитывает пассивный доход, накопленный с last_collection_time.
     Возвращает (накопленный_доход, новое_время_сбора).
     """
+    # ... (Остальная часть функции остается без изменений)
     last_collection_time = game_data.get('last_collection_time')
     if not last_collection_time or not isinstance(last_collection_time, datetime):
-        # Если время не установлено, сбора не было
         return 0.0, datetime.now(timezone.utc)
 
-    # Убедимся, что время UTC-совместимо для расчетов
     if last_collection_time.tzinfo is None:
         last_collection_time = last_collection_time.replace(tzinfo=timezone.utc)
 
     current_time = datetime.now(timezone.utc)
     
-    # Ограничиваем максимальное время для предотвращения эксплойтов (например, до 7 дней)
     max_time_delta = timedelta(days=7)
     time_delta = current_time - last_collection_time
 
@@ -164,7 +220,6 @@ def calculate_passive_income(game_data: dict) -> tuple[float, datetime]:
         
     total_seconds = time_delta.total_seconds()
     
-    # Расчет дохода в секунду
     total_income_per_second = 0.0
     sectors = game_data.get('sectors', {})
     for sector_id, level in sectors.items():
@@ -174,10 +229,8 @@ def calculate_passive_income(game_data: dict) -> tuple[float, datetime]:
             
     accumulated_income = total_income_per_second * total_seconds
     
-    # Устанавливаем новое время сбора в текущее время (или время + max_time_delta, если ограничено)
     new_collection_time = current_time 
 
-    # Округляем доход до двух знаков после запятой
     return round(accumulated_income, 2), new_collection_time
 
 # --- Логика Игры (Транзакции) ---
@@ -185,12 +238,12 @@ def calculate_passive_income(game_data: dict) -> tuple[float, datetime]:
 @firestore.transactional
 def get_or_create_state_transaction(transaction: Transaction, doc_ref, user_id: str) -> dict:
     """Получает состояние или создает новое в транзакции."""
+    # ... (Остальная часть функции остается без изменений)
     doc = doc_ref.get(transaction=transaction)
     
     if doc.exists:
         data = doc.to_dict()
     else:
-        # Инициализация нового состояния
         data = {
             "user_id": user_id,
             "balance": INITIAL_BALANCE,
@@ -205,13 +258,12 @@ def get_or_create_state_transaction(transaction: Transaction, doc_ref, user_id: 
 @firestore.transactional
 def collect_income_transaction(transaction: Transaction, doc_ref, game_data: dict) -> tuple[dict, float]:
     """Собирает пассивный доход и обновляет баланс в транзакции."""
-    
+    # ... (Остальная часть функции остается без изменений)
     accumulated_income, new_time = calculate_passive_income(game_data)
     
     if accumulated_income > 0.0:
         new_balance = game_data['balance'] + accumulated_income
         
-        # Обновление данных
         updates = {
             "balance": round(new_balance, 2),
             "last_collection_time": new_time,
@@ -221,7 +273,6 @@ def collect_income_transaction(transaction: Transaction, doc_ref, game_data: dic
         game_data.update(updates)
         return game_data, accumulated_income
         
-    # Если дохода нет, просто обновляем время сбора, но не баланс
     updates = {"last_collection_time": new_time}
     transaction.update(doc_ref, updates)
     game_data.update(updates)
@@ -231,8 +282,7 @@ def collect_income_transaction(transaction: Transaction, doc_ref, game_data: dic
 @firestore.transactional
 def buy_sector_transaction(transaction: Transaction, doc_ref, game_data: dict, sector_id: str) -> tuple[dict, bool, float]:
     """Покупает следующий уровень сектора в транзакции."""
-    
-    # Сначала собираем любой накопленный доход
+    # ... (Остальная часть функции остается без изменений)
     game_data, collected_amount = collect_income_transaction(transaction, doc_ref, game_data)
 
     current_level = game_data['sectors'].get(sector_id, 0)
@@ -241,15 +291,12 @@ def buy_sector_transaction(transaction: Transaction, doc_ref, game_data: dict, s
     if not config:
         return game_data, False, collected_amount
         
-    # Расчет стоимости
     cost = config["base_cost"] * (current_level + 1)
     
     if game_data['balance'] >= cost:
-        # Выполняем покупку
         new_balance = game_data['balance'] - cost
         new_level = current_level + 1
         
-        # Обновление данных
         game_data['sectors'][sector_id] = new_level
         
         updates = {
@@ -257,13 +304,11 @@ def buy_sector_transaction(transaction: Transaction, doc_ref, game_data: dict, s
             f"sectors.{sector_id}": new_level,
         }
         
-        # Мы уже обновили last_collection_time через collect_income_transaction
         transaction.update(doc_ref, updates)
         
         game_data.update(updates)
         return game_data, True, collected_amount
     
-    # Недостаточно средств
     return game_data, False, collected_amount
 
 # --- Эндпоинты API ---
@@ -286,6 +331,40 @@ async def serve_index():
         raise HTTPException(status_code=500, detail="Файл index.html не найден.")
 
 
+@app.post("/webhook")
+async def telegram_webhook(update: TelegramUpdate, request: Request):
+    """
+    Принимает обновления от Telegram и обрабатывает команду /start.
+    ЭТО НОВЫЙ ЭНДПОИНТ.
+    """
+    if update.message and update.message.text:
+        text = update.message.text.strip()
+        chat_id = update.message.chat['id']
+        
+        # Обработка команды /start
+        if text.startswith("/start"):
+            logger.info(f"Получена команда /start от чата {chat_id}.")
+            
+            # Базовый URL вашего Render-сервиса
+            base_url = get_base_url(request)
+            web_app_url = f"{base_url}/webapp"
+
+            welcome_message = (
+                "Добро пожаловать в *TashBoss Clicker*!\n\n"
+                "Здесь вы можете развивать свой бизнес и зарабатывать BossCoin.\n"
+                "Нажмите кнопку ниже, чтобы начать играть!"
+            )
+            
+            await send_telegram_message(chat_id, welcome_message, web_app_url)
+            
+            return JSONResponse({"status": "success", "message": "Command processed"})
+        
+        # Добавьте другую логику обработки сообщений здесь
+        logger.info(f"Получено сообщение от чата {chat_id}: {text}")
+
+    return JSONResponse({"status": "ignored", "message": "No action required"})
+
+
 @app.post("/api/load_state", response_model=GameState)
 async def load_state(user_id: str = Depends(get_auth_data)):
     """Загружает или создает состояние игры и рассчитывает доступный доход."""
@@ -295,7 +374,6 @@ async def load_state(user_id: str = Depends(get_auth_data)):
     try:
         game_data = get_or_create_state_transaction(transaction, doc_ref, user_id)
         
-        # Рассчитываем доступный доход без сбора
         available_income, _ = calculate_passive_income(game_data)
         game_data['available_income'] = available_income
         
@@ -313,16 +391,12 @@ async def collect_income(user_id: str = Depends(get_auth_data)):
     transaction = DB_CLIENT.transaction()
     
     try:
-        # 1. Сначала загружаем текущее состояние (без транзакции, чтобы избежать двойного вызова)
         current_data = doc_ref.get().to_dict()
         if not current_data:
-             # Это должно быть обработано через load_state, но на всякий случай
             raise HTTPException(status_code=404, detail="Состояние игры не найдено.")
             
-        # 2. Выполняем сбор в транзакции
         updated_data, collected_amount = collect_income_transaction(transaction, doc_ref, current_data)
         
-        # Обновляем поля Pydantic
         updated_data['available_income'] = 0.0
         updated_data['collected_amount'] = collected_amount
         
@@ -344,22 +418,15 @@ async def buy_sector(request: BuySectorRequest, user_id: str = Depends(get_auth_
         raise HTTPException(status_code=400, detail="Неверный идентификатор сектора.")
         
     try:
-        # 1. Сначала загружаем текущее состояние
         current_data = doc_ref.get().to_dict()
         if not current_data:
             raise HTTPException(status_code=404, detail="Состояние игры не найдено.")
             
-        # 2. Выполняем покупку в транзакции (включает сбор дохода)
         updated_data, success, collected_amount = buy_sector_transaction(transaction, doc_ref, current_data, sector_id)
         
-        # Обновляем поля Pydantic
         updated_data['available_income'] = 0.0
         updated_data['purchase_successful'] = success
         updated_data['collected_amount'] = collected_amount
-        
-        if not success:
-             # Возвращаем 400, но с обновленным состоянием (если баланс изменился)
-             return GameState(**updated_data) # Должен быть 200, чтобы UI мог обновить баланс
         
         return GameState(**updated_data)
         
