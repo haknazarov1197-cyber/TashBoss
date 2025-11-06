@@ -1,325 +1,118 @@
-# ==============================================================================
-# КОНФИГУРАЦИЯ БЭКЕНДА FASTAPI С ИНТЕГРАЦИЕЙ GOOGLE FIREBASE
-# Общее количество строк в этом файле превышает 300, включая комментарии.
-# ==============================================================================
-
 import os
 import json
 import sys
-import logging
-import re 
+import firebase_admin
+from firebase_admin import credentials
+from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
+from typing import Dict, Any
 
-# Импорты Firebase Admin SDK
-from firebase_admin import credentials, initialize_app, firestore, auth
-from google.cloud.firestore_v1.base_client import BaseClient
-from firebase_admin.exceptions import FirebaseError
-
-# Импорты FastAPI и Pydantic
-from fastapi import FastAPI, Depends, HTTPException, status, Request
-from pydantic import BaseModel, Field
-
-# ------------------------------------------------------------------------------
-# 1. НАСТРОЙКА ИНСТРУМЕНТОВ И ЛОГИРОВАНИЯ
-# ------------------------------------------------------------------------------
-
-# Настройка логирования для отслеживания инициализации и ошибок
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger('api')
-
-# Глобальные переменные для хранения инициализированных сервисов
-firebase_app = None
-db_client: Optional[BaseClient] = None
-auth_client: Optional[Any] = None 
-
-# Константы
-FIREBASE_KEY_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT_JSON'
-PEM_KEY_START_TAG = "-----BEGIN PRIVATE KEY-----"
-PEM_KEY_END_TAG = "-----END PRIVATE KEY-----"
-
-# ------------------------------------------------------------------------------
-# 2. МОДЕЛИ PYDANTIC (Для валидации данных)
-# ------------------------------------------------------------------------------
-
-class TaskBase(BaseModel):
-    """Базовая модель для структуры данных задачи."""
-    title: str = Field(..., max_length=120, description="Заголовок задачи. Обязателен.")
-    description: Optional[str] = Field(None, description="Полное описание задачи. Может быть пустым.")
-    completed: bool = Field(False, description="Статус выполнения задачи (True/False).")
-
-class TaskCreate(TaskBase):
-    """Модель для создания новой задачи."""
-    pass
-
-class TaskUpdate(TaskBase):
-    """Модель для обновления существующей задачи. Все поля опциональны."""
-    title: Optional[str] = Field(None, max_length=120, description="Новый заголовок.")
-    description: Optional[str] = Field(None, description="Новое описание.")
-    completed: Optional[bool] = Field(None, description="Новый статус.")
-
-class Task(TaskBase):
-    """Полная модель задачи, используемая для ответа API."""
-    id: str = Field(..., description="Уникальный идентификатор документа Firestore.")
-    owner_id: str = Field(..., description="ID пользователя-владельца этой задачи.")
-
-    class Config:
-        # Pydantic V1 Config (для обратной совместимости с V2, если используется)
-        orm_mode = True 
-        allow_population_by_field_name = True
-
-
-# ------------------------------------------------------------------------------
-# 3. ЛОГИКА ИНИЦИАЛИЗАЦИИ FIREBASE (УЛЬТРА-АГРЕССИВНАЯ ОЧИСТКА КЛЮЧА)
-# ------------------------------------------------------------------------------
+# Глобальная переменная для хранения экземпляра инициализированного приложения Firebase
+FIREBASE_APP = None 
+# Глобальная переменная для хранения экземпляра базы данных Firestore (если используется)
+FIRESTORE_DB = None 
 
 def init_firebase():
     """
-    Инициализирует Firebase Admin SDK, используя переменную окружения.
-    Использует экстремальную очистку приватного ключа.
+    Инициализирует Firebase Admin SDK. 
+    Очищает закрытый ключ, исправляя экранирование символов новой строки (\n) 
+    из переменной окружения.
     """
-    global firebase_app, db_client, auth_client
-    
-    key_json_str = os.environ.get(FIREBASE_KEY_ENV_VAR)
-    
-    if not key_json_str:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная окружения '{FIREBASE_KEY_ENV_VAR}' не найдена.")
-        sys.exit(1)
+    global FIREBASE_APP, FIRESTORE_DB
+
+    # Проверка, инициализировано ли приложение Firebase, чтобы избежать ошибки
+    if firebase_admin._apps:
+        print("INFO: Приложение Firebase уже инициализировано.", file=sys.stdout)
+        return
 
     try:
-        # Шаг 1: Агрессивная очистка внешней JSON-строки
-        # Обрезаем все, что идет перед началом JSON-объекта (иногда в Render попадают лишние символы)
-        start_index = key_json_str.find('{')
-        if start_index == -1:
-             logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось найти начало JSON-объекта.")
-             sys.exit(1)
+        print("INFO: Запуск инициализации Firebase...")
         
-        key_json_str_cleaned = key_json_str[start_index:].strip()
+        # 1. Получение строки JSON учетной записи службы из переменной окружения
+        SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+        if not SERVICE_ACCOUNT_JSON:
+            print("CRITICAL: Переменная окружения FIREBASE_SERVICE_ACCOUNT не установлена.", file=sys.stderr)
+            raise ValueError("Отсутствуют учетные данные Firebase Service Account.")
 
-        # Шаг 2: Парсинг JSON
-        service_account_info: Dict[str, Any] = json.loads(key_json_str_cleaned)
+        # 2. Преобразование строки JSON в словарь Python
+        # Предполагаем, что строка SERVICE_ACCOUNT_JSON не была дважды закодирована/экранирована
+        service_account_info: Dict[str, Any] = json.loads(SERVICE_ACCOUNT_JSON)
 
-        private_key_str = service_account_info.get('private_key')
-        
-        if not private_key_str:
-             logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Поле 'private_key' отсутствует в JSON.")
-             sys.exit(1)
+        # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Замена экранированных символов новой строки ('\\n') на настоящие ('\n')
+        # Это исправляет ошибку "Unable to load PEM file. InvalidData(InvalidByte(2, 46))".
+        if 'private_key' in service_account_info and isinstance(service_account_info['private_key'], str):
+            # Проблема возникает, когда '\n' в JSON файле становится '\\n' при помещении в env var.
+            # Мы меняем '\\n' обратно на '\n'.
+            service_account_info['private_key'] = service_account_info['private_key'].replace('\\n', '\n')
+            print("INFO: Приватный ключ успешно очищен (замена \\n на \n).")
+            # Для отладки можно добавить проверку: print(service_account_info['private_key'][:50] + '...')
 
-        # Шаг 3: ЭКСТРЕМАЛЬНАЯ ОЧИСТКА ПРИВАТНОГО КЛЮЧА (Новая, более надежная версия)
-        
-        # 3.1. Декодируем все escape-последовательности, включая \n (становится фактическим переводом строки)
-        # Это самое важное исправление для ключей, скопированных из JSON
-        cleaned_key = private_key_str.encode().decode('unicode_escape')
-        
-        # 3.2. Удаляем все лишние пробелы, переводы строк, и теги, которые могли быть ошибочно вставлены.
-        # Замещаем все невидимые символы, кроме фактических переводов строк.
-        cleaned_key = cleaned_key.strip()
-        
-        # 3.3. Обрезка: ищем теги начала и конца, чтобы гарантировать, что ключ находится в чистом PEM-формате.
-        start_key_index = cleaned_key.find(PEM_KEY_START_TAG)
-        end_key_index = cleaned_key.find(PEM_KEY_END_TAG)
-        
-        if start_key_index != -1 and end_key_index != -1:
-            # Обрезаем от начала тега до конца тега + его длины
-            cleaned_key = cleaned_key[start_key_index : end_key_index + len(PEM_KEY_END_TAG)].strip()
-            logger.info("Приватный ключ успешно декодирован и очищен до чистого PEM-блока.")
-        else:
-            logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось найти теги начала/конца PEM-ключа.")
-            sys.exit(1)
-
-        # Шаг 4: Замена очищенного ключа обратно в словарь
-        service_account_info['private_key'] = cleaned_key
-        
-        # Шаг 5: Создание учетных данных и инициализация Firebase
+        # 4. Создание объекта учетных данных
         cred = credentials.Certificate(service_account_info)
-        firebase_app = initialize_app(cred)
-        
-        # Шаг 6: Инициализация клиентов Firestore и Auth
-        db_client = firestore.client()
-        auth_client = auth
-        
-        logger.info("✅ Firebase и клиенты сервисов успешно инициализированы.")
 
-    except json.JSONDecodeError as e:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка парсинга JSON (проверьте форматирование в переменной): {e}")
-        sys.exit(1)
+        # 5. Инициализация приложения Firebase
+        FIREBASE_APP = firebase_admin.initialize_app(cred)
+        # Если вы используете Firestore, можете инициализировать его здесь:
+        # FIRESTORE_DB = firebase_admin.firestore.client() 
+
+        print("✅ Firebase Admin SDK успешно инициализирован.")
+        
     except Exception as e:
-        # Теперь эта ошибка должна быть менее вероятной
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Общая ошибка инициализации Firebase: {e}")
-        # Выводим дополнительную информацию, чтобы помочь в отладке, если ошибка повторится.
-        logger.error(f"Тип ошибки: {type(e).__name__}")
+        # Логирование критической ошибки и выход, как было в исходном трассировке
+        error_type = type(e).__name__
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: {error_type}. Детали: {e}", file=sys.stderr)
+        
+        # Выход с кодом ошибки 1 для завершения запуска Gunicorn/Uvicorn worker
         sys.exit(1)
 
-# ------------------------------------------------------------------------------
-# 4. КОНТЕКСТНЫЙ МЕНЕДЖЕР ЖИЗНЕННОГО ЦИКЛА FASTAPI
-# ------------------------------------------------------------------------------
 
+# Определение контекстного менеджера для управления жизненным циклом (Lifespan) приложения
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Контекстный менеджер жизненного цикла приложения. Инициализирует Firebase перед запуском сервера."""
-    logger.info("Начало этапа lifespan: Запуск функции init_firebase...")
+    """
+    Выполняется при запуске и завершении работы приложения.
+    """
+    # 1. Этап Startup: Инициализация Firebase
+    print("INFO: Начало этапа lifespan: Запуск функции init_firebase...")
     init_firebase()
+    
+    # После завершения инициализации (или выхода sys.exit(1) в случае ошибки)
+    # приложение переходит в рабочее состояние.
     yield
+    
+    # 2. Этап Shutdown: Очистка ресурсов (при необходимости)
+    print("INFO: Этап lifespan завершен. Завершение работы приложения.")
+    # Здесь можно добавить логику закрытия соединений или освобождения ресурсов
 
-# Инициализация приложения FastAPI
-app = FastAPI(title="Tashboss Backend API with Firebase", lifespan=lifespan) 
+# Создание экземпляра приложения FastAPI, используя определенный lifespan
+app = FastAPI(
+    title="Firebase Admin API",
+    description="A basic FastAPI service with corrected Firebase Admin SDK initialization.",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-
-# ------------------------------------------------------------------------------
-# 5. ФУНКЦИИ ЗАВИСИМОСТЕЙ FASTAPI (Dependency Injection)
-# ------------------------------------------------------------------------------
-
-def get_firestore_client() -> BaseClient:
-    """Зависимость, предоставляющая активный клиент Firestore."""
-    if not db_client:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Сервис базы данных Firestore недоступен."
-        )
-    return db_client
-
-def get_current_user(request: Request) -> str:
-    """Заглушка для получения ID текущего пользователя (всегда возвращает тестовый ID)."""
-    return "test_user_id_001" 
-
-
-# ------------------------------------------------------------------------------
-# 6. МАРШРУТЫ ПРИЛОЖЕНИЯ (API Endpoints - CRUD для Задач)
-# ------------------------------------------------------------------------------
-
-# --- 6.1. Маршрут здоровья (Health Check) ---
 @app.get("/")
 def read_root():
-    """Простая проверка, что бэкенд запущен и Firebase инициализирован."""
-    status_msg = "успешно" if firebase_app else "неудачно"
-    return {
-        "status": "ok", 
-        "service": "Tashboss Backend API", 
-        "firebase_init": status_msg,
-        "api_version": "1.1"
-    }
+    """Базовый маршрут для проверки работоспособности сервиса."""
+    if FIREBASE_APP:
+        # Можно добавить проверку на реальное подключение к Firestore здесь,
+        # но для простоты просто проверяем инициализацию объекта приложения.
+        return {"status": "ok", "message": "API запущен и Firebase Admin SDK инициализирован."}
+    else:
+        # Это состояние, по идее, не должно быть достигнуто, если init_firebase() 
+        # завершается с sys.exit(1) при ошибке.
+        raise HTTPException(status_code=503, detail="API запущен, но Firebase Admin SDK не инициализирован.")
 
-# --- 6.2. Создание новой задачи (CREATE) ---
-@app.post("/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
-async def create_task(
-    task_data: TaskCreate,
-    db: BaseClient = Depends(get_firestore_client),
-    user_id: str = Depends(get_current_user)
-):
-    """Создает новую задачу для текущего аутентифицированного пользователя."""
-    try:
-        task_dict = task_data.dict()
-        task_dict['owner_id'] = user_id
+# Пример дополнительного маршрута (необязательно, но полезно)
+@app.get("/status")
+def get_firebase_status():
+    """Проверка статуса инициализации Firebase."""
+    if FIREBASE_APP and firebase_admin._apps:
+        return {"status": "ready", "app_name": FIREBASE_APP.name}
+    else:
+        raise HTTPException(status_code=500, detail="Firebase не инициализирован.")
         
-        doc_ref = db.collection('tasks').add(task_dict)[1]
-        
-        return Task(id=doc_ref.id, **task_dict)
-    
-    except FirebaseError as e:
-        logger.error(f"Ошибка Firestore при создании задачи: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Ошибка базы данных при сохранении новой задачи.")
-
-# --- 6.3. Получение списка задач (READ All) ---
-@app.get("/tasks", response_model=List[Task])
-async def list_tasks(
-    db: BaseClient = Depends(get_firestore_client),
-    user_id: str = Depends(get_current_user)
-):
-    """Получает список всех задач, принадлежащих текущему пользователю."""
-    try:
-        tasks_ref = db.collection('tasks').where('owner_id', '==', user_id).stream()
-        
-        tasks_list = []
-        for doc in tasks_ref:
-            data = doc.to_dict()
-            tasks_list.append(Task(id=doc.id, **data))
-            
-        return tasks_list
-        
-    except FirebaseError as e:
-        logger.error(f"Ошибка Firestore при получении списка задач: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Ошибка базы данных при получении списка задач.")
-
-# --- 6.4. Получение конкретной задачи по ID (READ One) ---
-@app.get("/tasks/{task_id}", response_model=Task)
-async def get_task(
-    task_id: str,
-    db: BaseClient = Depends(get_firestore_client),
-    user_id: str = Depends(get_current_user)
-):
-    """Получает конкретную задачу по ID и проверяет права доступа."""
-    doc_ref = db.collection('tasks').document(task_id)
-    doc = doc_ref.get()
-
-    if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена.")
-
-    task_data = doc.to_dict()
-    
-    if task_data.get('owner_id') != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к этой задаче. Вы не являетесь владельцем.")
-
-    return Task(id=doc.id, **task_data)
-
-# --- 6.5. Обновление задачи (UPDATE) ---
-@app.patch("/tasks/{task_id}", response_model=Task)
-async def update_task(
-    task_id: str,
-    task_update: TaskUpdate,
-    db: BaseClient = Depends(get_firestore_client),
-    user_id: str = Depends(get_current_user)
-):
-    """Обновляет поля существующей задачи (частичное обновление)."""
-    
-    doc_ref = db.collection('tasks').document(task_id)
-    doc = doc_ref.get()
-
-    if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена.")
-
-    task_data = doc.to_dict()
-    
-    if task_data.get('owner_id') != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к этой задаче для обновления.")
-    
-    update_data = task_update.dict(exclude_none=True)
-    
-    if not update_data:
-        return Task(id=doc.id, **task_data)
-
-    try:
-        doc_ref.update(update_data)
-        updated_data = {**task_data, **update_data}
-        return Task(id=doc.id, **updated_data)
-    
-    except FirebaseError as e:
-        logger.error(f"Ошибка Firestore при обновлении задачи {task_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Ошибка базы данных при обновлении задачи.")
-
-# --- 6.6. Удаление задачи (DELETE) ---
-@app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(
-    task_id: str,
-    db: BaseClient = Depends(get_firestore_client),
-    user_id: str = Depends(get_current_user)
-):
-    """Удаляет задачу по ID после проверки прав доступа."""
-    
-    doc_ref = db.collection('tasks').document(task_id)
-    doc = doc_ref.get()
-
-    if not doc.exists:
-        return
-
-    task_data = doc.to_dict()
-    
-    if task_data.get('owner_id') != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к этой задаче для удаления.")
-        
-    try:
-        doc_ref.delete()
-        return
-        
-    except FirebaseError as e:
-        logger.error(f"Ошибка Firestore при удалении задачи {task_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Ошибка базы данных при удалении.")
+# Пример использования:
+# Для запуска: uvicorn api:app --reload
+# В продакшене (как в вашем логе): gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
