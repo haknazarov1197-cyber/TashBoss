@@ -5,3 +5,4 @@ gunicorn
 firebase-admin
 python-telegram-bot
 httpx
+python-dotenv
