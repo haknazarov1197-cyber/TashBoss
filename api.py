@@ -1,102 +1,149 @@
 import os
-import json
 import sys
-import firebase_admin
-from firebase_admin import credentials
-from fastapi import FastAPI, HTTPException
+import json
+import logging
 from contextlib import asynccontextmanager
-from typing import Dict, Any
 
-# Глобальная переменная для хранения экземпляра инициализированного приложения Firebase
-FIREBASE_APP = None 
-# Глобальная переменная для хранения экземпляра базы данных Firestore (если используется)
-FIRESTORE_DB = None 
+from fastapi import FastAPI
+from pydantic import BaseModel
 
+# --- Настройка логирования ---
+# Используем стандартный модуль logging для вывода сообщений
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- Глобальные переменные Firebase ---
+# Глобально храним объект базы данных после успешной инициализации
+db = None
+
+# --- Модели данных для FastAPI (Pydantic) ---
+# Пример модели для данных, которые мы будем сохранять
+class Task(BaseModel):
+    title: str
+    description: str | None = None
+    completed: bool = False
+
+# --- Функция инициализации Firebase ---
 def init_firebase():
     """
-    Инициализирует Firebase Admin SDK. 
-    Очищает закрытый ключ, исправляя экранирование символов новой строки (\n) 
-    из переменной окружения.
+    Инициализирует Firebase Admin SDK.
+    Получает учетные данные из переменной окружения FIREBASE_SERVICE_ACCOUNT.
     """
-    global FIREBASE_APP, FIRESTORE_DB
+    global db
+    logger.info("Запуск инициализации Firebase...")
 
-    # Проверка, инициализировано ли приложение Firebase, чтобы избежать ошибки
-    if firebase_admin._apps:
-        print("INFO: Приложение Firebase уже инициализировано.", file=sys.stdout)
-        return
+    # 1. Проверка наличия переменной окружения
+    service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+    
+    if not service_account_json:
+        # Выводим критическое сообщение и завершаем работу
+        logger.critical("Переменная окружения FIREBASE_SERVICE_ACCOUNT не установлена.")
+        try:
+            # Импортируем firebase_admin только здесь, чтобы избежать ошибки импорта,
+            # если мы знаем, что все равно будем завершать работу
+            import firebase_admin 
+            logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Детали: Отсутствуют учетные данные Firebase Service Account.")
+        except ImportError:
+            pass # Если даже firebase_admin не установлен, ошибка все равно критическая
+        
+        # Если инициализация невозможна, мы не можем безопасно продолжать
+        raise ValueError("Отсутствуют учетные данные Firebase Service Account.")
 
+    # 2. Инициализация Admin SDK
     try:
-        print("INFO: Запуск инициализации Firebase...")
+        # Импортируем Admin SDK
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+
+        # Преобразуем JSON-строку в объект Python
+        service_account_info = json.loads(service_account_json)
         
-        # 1. Получение строки JSON учетной записи службы из переменной окружения
-        SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
-        if not SERVICE_ACCOUNT_JSON:
-            print("CRITICAL: Переменная окружения FIREBASE_SERVICE_ACCOUNT не установлена.", file=sys.stderr)
-            raise ValueError("Отсутствуют учетные данные Firebase Service Account.")
-
-        # 2. Преобразование строки JSON в словарь Python
-        service_account_info: Dict[str, Any] = json.loads(SERVICE_ACCOUNT_JSON)
-
-        # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Замена экранированных символов новой строки ('\\n') на настоящие ('\n')
-        if 'private_key' in service_account_info and isinstance(service_account_info['private_key'], str):
-            # Мы меняем '\\n' обратно на '\n'. Это исправляет ошибку при загрузке PEM-файла.
-            service_account_info['private_key'] = service_account_info['private_key'].replace('\\n', '\n')
-            print("INFO: Приватный ключ успешно очищен (замена \\n на \n).")
-
-        # 4. Создание объекта учетных данных
+        # Создаем учетные данные
         cred = credentials.Certificate(service_account_info)
-
-        # 5. Инициализация приложения Firebase
-        FIREBASE_APP = firebase_admin.initialize_app(cred)
-        # FIRESTORE_DB = firebase_admin.firestore.client() # Раскомментируйте, если используете Firestore
-
-        print("✅ Firebase Admin SDK успешно инициализирован.")
         
-    except Exception as e:
-        error_type = type(e).__name__
-        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: {error_type}. Детали: {e}", file=sys.stderr)
+        # Инициализируем приложение Firebase
+        # Проверяем, не было ли приложение уже инициализировано (например, Gunicorn-воркером)
+        if not firebase_admin.get_app(name="[DEFAULT]"):
+             firebase_admin.initialize_app(cred)
         
-        # Выход с кодом ошибки 1 для завершения запуска Gunicorn/Uvicorn worker
+        # Получаем ссылку на Firestore DB
+        db = firestore.client()
+        logger.info("✅ Инициализация Firebase успешно завершена.")
+
+    except (ImportError, ValueError, json.JSONDecodeError) as e:
+        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: {type(e).__name__}. Детали: {e}")
+        # Завершаем процесс при неудачной инициализации
         sys.exit(1)
 
 
-# Определение контекстного менеджера для управления жизненным циклом (Lifespan) приложения
+# --- Функция для управления жизненным циклом (Lifespan) приложения ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Выполняется при запуске и завершении работы приложения.
+    Функция, которая запускается перед стартом сервера и после его остановки.
+    Используется для инициализации Firebase.
     """
-    # 1. Этап Startup: Инициализация Firebase
-    print("INFO: Начало этапа lifespan: Запуск функции init_firebase...")
-    init_firebase()
-    
-    # Приложение переходит в рабочее состояние, только если init_firebase прошло успешно
-    yield
-    
-    # 2. Этап Shutdown: Очистка ресурсов
-    print("INFO: Этап lifespan завершен. Завершение работы приложения.")
+    logger.info("Начало этапа lifespan: Запуск функции init_firebase...")
+    init_firebase() # Запускаем инициализацию перед стартом
+    try:
+        yield # Сервер обрабатывает запросы
+    finally:
+        logger.info("Конец этапа lifespan: Завершение работы.")
 
-# Создание экземпляра приложения FastAPI, используя определенный lifespan
+
+# --- Создание экземпляра FastAPI ---
 app = FastAPI(
-    title="Firebase Admin API",
-    description="A basic FastAPI service with corrected Firebase Admin SDK initialization.",
-    version="1.0.0",
+    title="Tashboss API", 
+    version="1.0.0", 
     lifespan=lifespan
 )
 
-@app.get("/")
-def read_root():
-    """Базовый маршрут для проверки работоспособности сервиса."""
-    if FIREBASE_APP:
-        return {"status": "ok", "message": "API запущен и Firebase Admin SDK инициализирован."}
-    else:
-        # Этот маршрут не должен быть достигнут в случае сбоя инициализации
-        raise HTTPException(status_code=503, detail="API запущен, но Firebase Admin SDK не инициализирован.")
 
-@app.get("/status")
-def get_firebase_status():
-    """Проверка статуса инициализации Firebase."""
-    if FIREBASE_APP and firebase_admin._apps:
-        return {"status": "ready", "app_name": FIREBASE_APP.name}
+# --- Маршруты API ---
+
+# 1. Проверочный маршрут
+@app.get("/", summary="Проверка работоспособности")
+async def root():
+    return {"message": "Tashboss API запущен и работает!"}
+
+# 2. Маршрут для проверки статуса Firebase (потребуется после настройки)
+@app.get("/status", summary="Проверка статуса Firebase")
+async def get_status():
+    if db:
+        # В рабочем приложении можно сделать тестовый запрос к DB
+        return {"status": "ok", "db_initialized": True, "message": "API и Firebase работают."}
     else:
-        raise HTTPException(status_code=500, detail="Firebase не инициализирован.")
+        return {"status": "error", "db_initialized": False, "message": "API работает, но Firebase не инициализирован."}
+
+# 3. Маршрут для создания задачи (ПРИМЕР)
+@app.post("/tasks", summary="Создать новую задачу")
+async def create_task(task: Task):
+    if not db:
+        return {"error": "База данных не инициализирована."}, 500
+    
+    # ПРИМЕР: сохранение в Firestore
+    try:
+        doc_ref = await db.collection("tasks").add(task.model_dump())
+        return {"id": doc_ref[1].id, "task": task}
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении задачи: {e}")
+        return {"error": f"Ошибка базы данных: {e}"}, 500
+
+# 4. Маршрут для получения всех задач (ПРИМЕР)
+@app.get("/tasks", summary="Получить все задачи")
+async def get_tasks():
+    if not db:
+        return {"error": "База данных не инициализирована."}, 500
+    
+    # ПРИМЕР: чтение из Firestore
+    try:
+        tasks = []
+        docs = db.collection("tasks").stream()
+        for doc in docs:
+            task_data = doc.to_dict()
+            task_data["id"] = doc.id
+            tasks.append(task_data)
+        return {"tasks": tasks}
+    except Exception as e:
+        logger.error(f"Ошибка при чтении задач: {e}")
+        return {"error": f"Ошибка базы данных: {e}"}, 500
