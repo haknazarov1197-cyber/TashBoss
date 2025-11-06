@@ -1,16 +1,20 @@
 // Глобальный объект для хранения данных игры
 let gameState = null;
 
-// Аутентификация: предполагаем, что токен будет предоставлен из Telegram WebApp initDataUnsafe
+// Аутентификация: Токен ID Firebase, полученный после успешного входа
 let authToken = null; 
-// Используем BASE_URL из ваших требований
-const BASE_API_URL = 'https://tashboss.onrender.com/api'; 
+let currentUserId = null;
+
+// !!! КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: БАЗОВЫЙ URL API !!!
+// Используем window.location.origin, так как Render обслуживает и фронтенд, и API
+// API находится по пути /api
+const BASE_API_URL = `${window.location.origin}/api`; 
 
 // --- Константы UI (должны совпадать с бэкендом) ---
 const SECTORS_CONFIG_FRONTEND = {
-    "sector1": {"name": "Сектор А", "passive_income": 0.5},
-    "sector2": {"name": "Сектор B", "passive_income": 2.0},
-    "sector3": {"name": "Сектор C", "passive_income": 10.0},
+    "sector1": {"name": "Сектор A (Киоски)", "passive_income": 0.5, "base_cost": 100},
+    "sector2": {"name": "Сектор B (Кафе)", "passive_income": 2.0, "base_cost": 500},
+    "sector3": {"name": "Сектор C (Офисы)", "passive_income": 10.0, "base_cost": 2500},
 };
 
 // --- DOM Элементы ---
@@ -19,7 +23,6 @@ const gameContent = document.getElementById('gameContent');
 const balanceDisplay = document.getElementById('balanceDisplay');
 const sectorsContainer = document.getElementById('sectorsContainer');
 const collectButton = document.getElementById('collectIncomeButton');
-const clickButton = document.getElementById('clickButton');
 const userIdDisplay = document.getElementById('userIdDisplay');
 const passiveIncomeDisplay = document.getElementById('passiveIncomeDisplay');
 
@@ -29,9 +32,12 @@ const passiveIncomeDisplay = document.getElementById('passiveIncomeDisplay');
 function showTemporaryMessage(message, isError = false) {
     const banner = document.getElementById('messageBanner');
     banner.textContent = message;
-    banner.className = isError 
-        ? 'p-3 mb-4 rounded-lg bg-red-600 text-white shadow-lg' 
-        : 'p-3 mb-4 rounded-lg bg-green-600 text-white shadow-lg';
+    
+    // Устанавливаем стили
+    banner.className = `p-3 mb-4 rounded-lg shadow-lg text-white ${isError ? 'bg-red-600' : 'bg-green-600'}`; 
+    
+    // Сбрасываем opacity перед показом
+    banner.style.opacity = 1; 
     banner.style.display = 'block';
     
     // Плавное исчезновение
@@ -39,9 +45,18 @@ function showTemporaryMessage(message, isError = false) {
         banner.style.opacity = 0;
         setTimeout(() => {
             banner.style.display = 'none';
-            banner.style.opacity = 1; // Сброс для следующего появления
-        }, 500); 
+        }, 500); // Совпадает с CSS transition duration
     }, 4000);
+}
+
+/**
+ * Рассчитывает стоимость следующего уровня сектора.
+ * Стоимость = BaseCost * (Текущий_Уровень + 1)
+ */
+function calculateNextLevelCost(sectorId, currentLevel) {
+    const config = SECTORS_CONFIG_FRONTEND[sectorId];
+    if (!config) return 0;
+    return config.base_cost * (currentLevel + 1);
 }
 
 function updateUI() {
@@ -51,25 +66,28 @@ function updateUI() {
     const balance = (gameState.balance || 0);
     const availableIncome = (gameState.available_income || 0);
     
-    balanceDisplay.textContent = new Intl.NumberFormat('ru-RU', { 
-        style: 'currency', 
-        currency: 'USD', // Имитация BossCoin
+    // Форматирование валюты
+    const formatter = new Intl.NumberFormat('ru-RU', { 
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
-    }).format(balance);
+    });
     
+    // BossCoin (BC)
+    balanceDisplay.textContent = formatter.format(balance) + ' BC';
+    
+    // Расчет общего пассивного дохода в секунду
     const totalIncome = Object.entries(gameState.sectors).reduce((sum, [key, level]) => {
         const incomePerLevel = SECTORS_CONFIG_FRONTEND[key]?.passive_income || 0;
         return sum + (incomePerLevel * level);
     }, 0);
     
-    passiveIncomeDisplay.textContent = `Пассивный доход/сек: ${totalIncome.toFixed(2)}`;
+    passiveIncomeDisplay.textContent = `Пассивный доход/сек: ${totalIncome.toFixed(2)} BC`;
 
     // --- Обновление кнопки сбора ---
     const incomeToCollect = parseFloat(availableIncome.toFixed(2));
-    collectButton.textContent = `Собрать доход (${incomeToCollect} BC)`;
+    collectButton.textContent = `Собрать доход (${formatter.format(incomeToCollect)} BC)`;
     
-    if (incomeToCollect > 0.01) { 
+    if (incomeToCollect >= 0.01) { 
         collectButton.disabled = false;
         collectButton.classList.remove('bg-gray-500', 'cursor-not-allowed');
         collectButton.classList.add('bg-yellow-500', 'hover:bg-yellow-600');
@@ -85,16 +103,13 @@ function updateUI() {
         if (!sectorElement) return;
 
         const currentLevel = gameState.sectors[sectorId] || 0;
-        
-        // Стоимость покупки следующего уровня
-        const baseCost = config.passive_income * 200; // Простая формула, так как base_cost не приходит
-        const nextLevelCost = baseCost * (currentLevel + 1);
+        const nextLevelCost = calculateNextLevelCost(sectorId, currentLevel);
 
         sectorElement.querySelector('.sector-level').textContent = `Уровень: ${currentLevel}`;
         sectorElement.querySelector('.sector-income').textContent = `+${config.passive_income.toFixed(2)} BC/сек`;
 
         const buyButton = sectorElement.querySelector('.buy-button');
-        buyButton.textContent = `Купить след. (${nextLevelCost.toFixed(2)} BC)`;
+        buyButton.textContent = `Купить след. (${formatter.format(nextLevelCost)} BC)`;
         buyButton.dataset.cost = nextLevelCost;
 
         if (balance >= nextLevelCost) {
@@ -108,16 +123,21 @@ function updateUI() {
         }
     });
 
-    // Обновление таймера (используется только для отладки, но полезно)
+    // Обновление таймера и ID
     const now = new Date();
-    document.getElementById('timer-status').textContent = `Обновлено: ${now.toLocaleTimeString()}`;
+    document.getElementById('timer-status').textContent = `Обновлено: ${now.toLocaleTimeString()} | User ID: ${gameState.user_id}`;
+    // Показываем укороченный UID
+    userIdDisplay.textContent = currentUserId.substring(0, 8) + '...';
+
+    gameContent.classList.remove('hidden');
+    statusMessage.classList.add('hidden');
 }
 
 // --- API Запросы с Аутентификацией ---
 
 async function apiCall(endpoint, method = 'POST', body = null) {
     if (!authToken) {
-        showTemporaryMessage('Ошибка: Пользователь не аутентифицирован.', true);
+        showTemporaryMessage('Ошибка: Пользователь не аутентифицирован. Перезапустите WebApp.', true);
         return null;
     }
 
@@ -146,7 +166,7 @@ async function apiCall(endpoint, method = 'POST', body = null) {
         
         return data;
     } catch (error) {
-        showTemporaryMessage(`Сетевая ошибка: ${error.message}`, true);
+        showTemporaryMessage(`Сетевая ошибка: Не удалось подключиться к серверу.`, true);
         console.error(`Fetch Error on ${endpoint}:`, error);
         return null;
     }
@@ -155,17 +175,11 @@ async function apiCall(endpoint, method = 'POST', body = null) {
 // --- Функции Игры ---
 
 async function loadGameState() {
-    const data = await apiCall('/load_state');
+    // Вызываем API для загрузки состояния
+    const data = await apiCall('/load_state'); 
     if (data) {
         gameState = data;
         updateUI();
-        // В Firebase Admin SDK UID пользователя - это user_id, но для фронтенда 
-        // нам достаточно знать, что он аутентифицирован.
-        const userIdFromState = data.user_id || 'N/A';
-        userIdDisplay.textContent = userIdFromState.substring(0, 8) + '...';
-        gameContent.classList.remove('hidden');
-        statusMessage.classList.add('hidden');
-        
     }
 }
 
@@ -176,10 +190,11 @@ async function handleCollectIncome() {
     const data = await apiCall('/collect_income');
     
     if (data) {
+        const collected = data.collected_amount || 0;
         gameState = data;
         updateUI();
-        if (data.collected_amount > 0.01) {
-            showTemporaryMessage(`💰 Собрано ${data.collected_amount.toFixed(2)} BossCoin!`);
+        if (collected >= 0.01) {
+            showTemporaryMessage(`💰 Собрано ${collected.toFixed(2)} BossCoin!`);
         } else {
             showTemporaryMessage('Пока нечего собирать.');
         }
@@ -203,32 +218,22 @@ async function handleBuySector(sectorId) {
     const data = await apiCall('/buy_sector', 'POST', { sector_id: sectorId });
     
     if (data) {
-        // Проверяем, произошла ли покупка (уровень увеличился)
-        const oldLevel = gameState.sectors[sectorId] || 0;
-        gameState = data;
-        updateUI();
-        
-        if (gameState.sectors[sectorId] > oldLevel) {
+        if (data.purchase_successful) {
+            gameState = data;
+            updateUI();
             showTemporaryMessage(`✅ Покупка успешна! Новый уровень ${gameState.sectors[sectorId]}.`);
         } else {
+            // Если баланс не прошел проверку на бэкенде (должно быть редко)
             showTemporaryMessage(`❌ Недостаточно средств для покупки!`, true);
         }
 
         // Если был собран пассивный доход перед покупкой, сообщаем об этом
         if (data.collected_amount > 0.01) {
-            showTemporaryMessage(`(Доход ${data.collected_amount.toFixed(2)} BC собран перед покупкой)`);
+            showTemporaryMessage(`(Доход ${data.collected_amount.toFixed(2)} BC собран перед покупкой)`, false);
         }
     }
     buyButton.disabled = false;
 }
-
-// --- Обработчик Клика (для будущего расширения) ---
-function handleUserClick() {
-    // В текущей версии клик не отправляется на бэкенд, а просто дает визуальный эффект.
-    // Реальный кликер должен использовать `/click` endpoint, но пока мы используем пассивный доход.
-    showTemporaryMessage('+1 BC (Клик временно отключен, используйте пассивный доход)', false);
-}
-
 
 // --- Инициализация ---
 
@@ -244,8 +249,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <p class="text-xs text-gray-400 sector-level">Уровень: 0</p>
                 <p class="text-sm text-green-400 sector-income">+${config.passive_income.toFixed(2)} BC/сек</p>
             </div>
-            <button class="buy-button bg-gray-400 text-white py-2 px-4 rounded-lg shadow-md transition duration-200 cursor-not-allowed" disabled data-cost="1000">
-                Купить след. (1000 BC)
+            <button class="buy-button bg-gray-400 text-white py-2 px-4 rounded-lg shadow-md transition duration-200 cursor-not-allowed" disabled data-cost="${config.base_cost}">
+                Купить след. (${config.base_cost.toFixed(2)} BC)
             </button>
         `;
         sectorsContainer.appendChild(sectorCard);
@@ -255,51 +260,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 2. Установка обработчиков основных событий
     collectButton.addEventListener('click', handleCollectIncome);
-    clickButton.addEventListener('click', handleUserClick);
-
-
-    // 3. Главная функция запуска
-    async function main() {
-        statusMessage.textContent = "Инициализация Telegram WebApp...";
-        
-        if (typeof window.Telegram === 'undefined' || !window.Telegram.WebApp.initDataUnsafe) {
-            statusMessage.textContent = "❌ Ошибка: Запустите приложение внутри Telegram через кнопку бота.";
-            statusMessage.classList.add('text-red-500');
-            return;
-        }
-
-        // Токен Firebase ID предоставляется через onAuthStateChanged в index.html (для старой версии)
-        // Новая версия (где аутентификация перенесена на бэкенд)
-        // Для WebApp мы используем initData как токен, который бэкенд верифицирует
-        // и обменивает на Custom Token, который мы используем как Auth Bearer.
-
-        // ВНИМАНИЕ: Поскольку в index.html мы используем Firebase SDK для аутентификации, 
-        // нам нужен токен ID, который генерируется после входа.
-        // Здесь мы используем заглушку, так как токен ID приходит из Firebase Auth
-        // после успешного входа, который происходит в index.html.
-        
-        // Временный токен, который будет заменен реальным токеном ID в index.html
-        authToken = 'TEMP_TOKEN_WAITING_FOR_FIREBASE_AUTH'; 
-
-        // 4. Загрузка состояния игры
-        loadGameState();
-        
-        // 5. Цикл обновления:
-        // Используем периодический опрос /load_state для обновления доступного дохода.
-        setInterval(loadGameState, 5000); 
-    }
-    
-    // ВАЖНО: Мы перенесли аутентификацию в index.html (внутри <script type="module">), 
-    // поэтому main() будет запущена там после получения токена.
-    // Здесь мы просто определяем функции и DOM-логику.
 });
 
 // Глобальная функция, вызываемая из index.html после успешной аутентификации.
-window.initAppAfterAuth = (firebaseIdToken) => {
+window.initAppAfterAuth = (firebaseIdToken, userUID) => {
     authToken = firebaseIdToken;
+    currentUserId = userUID; // Устанавливаем UID для отображения
+    
     // После получения токена ID запускаем загрузку состояния
     loadGameState(); 
 
-    // Запускаем цикл обновления только после первой успешной загрузки состояния
+    // Запускаем цикл обновления (каждые 5 секунд)
     setInterval(loadGameState, 5000); 
 }
