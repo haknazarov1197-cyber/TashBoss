@@ -1,21 +1,5 @@
 import os
 import sys
-import json
-import logging
-from datetime import datetime, timezone, timedelta
-
-# FastAPI & Starlette Imports
-from fastapi import FastAPI, Depends, HTTPException, status, Header, Request, Body
-from fastapi.responses import JSONResponse
-from starlette.middleware.cors import CORSMiddleware
-from starlette.staticfiles import StaticFiles
-
-# Firebase Admin Imports
-import firebase_admin
-from firebase_admin import credentials, auth, firestore
-
-# Telegram Bot Importsimport os
-import sys
 import logging
 import json
 from base64 import b64decode
@@ -79,13 +63,18 @@ def init_firebase():
         sys.exit(1)
 
     try:
+        # --- НОВОЕ ИСПРАВЛЕНИЕ: Очистка строки перед декодированием ---
+        # Удаляем любые внешние кавычки или пробелы, которые могли быть добавлены
+        clean_key = FIREBASE_KEY_BASE64.strip().strip("'").strip('"')
+        
         # Применяем исправление: дополняем ключ символами '='
-        padded_key = add_padding_if_needed(FIREBASE_KEY_BASE64)
+        padded_key = add_padding_if_needed(clean_key)
         
         # Декодируем исправленный ключ
         decoded_key_bytes = b64decode(padded_key)
         
         # Загружаем JSON
+        # Если здесь происходит сбой с UnicodeDecodeError, это означает, что исходный Base64 был неверным.
         service_account_info = json.loads(decoded_key_bytes.decode('utf-8'))
         
         # Инициализируем Firebase
@@ -98,10 +87,12 @@ def init_firebase():
         logger.info("✅ Firebase успешно инициализирован и клиенты созданы.")
         
     except BinasciiError as e:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка декодирования Base64: {e}.")
+        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка декодирования Base64. Вероятно, неверная строка: {e}.")
         sys.exit(1)
     except Exception as e:
         logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Непредвиденная ошибка при инициализации Firebase: {e}")
+        # Выводим дополнительную подсказку для отладки
+        logger.critical("ПОДСКАЗКА: Ошибка 'UnicodeDecodeError' почти всегда указывает на поврежденный ключ FIREBASE_SERVICE_ACCOUNT_KEY в переменных окружения Render.")
         sys.exit(1)
 
 # --- Настройка FastAPI ---
@@ -425,3 +416,5 @@ async def get_custom_token(request: Request):
             status_code=500, detail="Не удалось сгенерировать токен Firebase."
         )
 
+# Создаем переменную 'app' для Gunicorn
+# gunicorn api:app
