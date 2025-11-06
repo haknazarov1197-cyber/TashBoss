@@ -35,30 +35,24 @@ def init_firebase():
             raise ValueError("Отсутствуют учетные данные Firebase Service Account.")
 
         # 2. Преобразование строки JSON в словарь Python
-        # Предполагаем, что строка SERVICE_ACCOUNT_JSON не была дважды закодирована/экранирована
         service_account_info: Dict[str, Any] = json.loads(SERVICE_ACCOUNT_JSON)
 
         # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Замена экранированных символов новой строки ('\\n') на настоящие ('\n')
-        # Это исправляет ошибку "Unable to load PEM file. InvalidData(InvalidByte(2, 46))".
         if 'private_key' in service_account_info and isinstance(service_account_info['private_key'], str):
-            # Проблема возникает, когда '\n' в JSON файле становится '\\n' при помещении в env var.
-            # Мы меняем '\\n' обратно на '\n'.
+            # Мы меняем '\\n' обратно на '\n'. Это исправляет ошибку при загрузке PEM-файла.
             service_account_info['private_key'] = service_account_info['private_key'].replace('\\n', '\n')
             print("INFO: Приватный ключ успешно очищен (замена \\n на \n).")
-            # Для отладки можно добавить проверку: print(service_account_info['private_key'][:50] + '...')
 
         # 4. Создание объекта учетных данных
         cred = credentials.Certificate(service_account_info)
 
         # 5. Инициализация приложения Firebase
         FIREBASE_APP = firebase_admin.initialize_app(cred)
-        # Если вы используете Firestore, можете инициализировать его здесь:
-        # FIRESTORE_DB = firebase_admin.firestore.client() 
+        # FIRESTORE_DB = firebase_admin.firestore.client() # Раскомментируйте, если используете Firestore
 
         print("✅ Firebase Admin SDK успешно инициализирован.")
         
     except Exception as e:
-        # Логирование критической ошибки и выход, как было в исходном трассировке
         error_type = type(e).__name__
         print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: {error_type}. Детали: {e}", file=sys.stderr)
         
@@ -76,13 +70,11 @@ async def lifespan(app: FastAPI):
     print("INFO: Начало этапа lifespan: Запуск функции init_firebase...")
     init_firebase()
     
-    # После завершения инициализации (или выхода sys.exit(1) в случае ошибки)
-    # приложение переходит в рабочее состояние.
+    # Приложение переходит в рабочее состояние, только если init_firebase прошло успешно
     yield
     
-    # 2. Этап Shutdown: Очистка ресурсов (при необходимости)
+    # 2. Этап Shutdown: Очистка ресурсов
     print("INFO: Этап lifespan завершен. Завершение работы приложения.")
-    # Здесь можно добавить логику закрытия соединений или освобождения ресурсов
 
 # Создание экземпляра приложения FastAPI, используя определенный lifespan
 app = FastAPI(
@@ -96,15 +88,11 @@ app = FastAPI(
 def read_root():
     """Базовый маршрут для проверки работоспособности сервиса."""
     if FIREBASE_APP:
-        # Можно добавить проверку на реальное подключение к Firestore здесь,
-        # но для простоты просто проверяем инициализацию объекта приложения.
         return {"status": "ok", "message": "API запущен и Firebase Admin SDK инициализирован."}
     else:
-        # Это состояние, по идее, не должно быть достигнуто, если init_firebase() 
-        # завершается с sys.exit(1) при ошибке.
+        # Этот маршрут не должен быть достигнут в случае сбоя инициализации
         raise HTTPException(status_code=503, detail="API запущен, но Firebase Admin SDK не инициализирован.")
 
-# Пример дополнительного маршрута (необязательно, но полезно)
 @app.get("/status")
 def get_firebase_status():
     """Проверка статуса инициализации Firebase."""
@@ -112,7 +100,3 @@ def get_firebase_status():
         return {"status": "ready", "app_name": FIREBASE_APP.name}
     else:
         raise HTTPException(status_code=500, detail="Firebase не инициализирован.")
-        
-# Пример использования:
-# Для запуска: uvicorn api:app --reload
-# В продакшене (как в вашем логе): gunicorn api:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
