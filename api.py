@@ -6,27 +6,46 @@ from fastapi import FastAPI
 from firebase_admin import credentials, initialize_app
 
 # Настройка логирования
-# Мы настроили подробное логирование, чтобы видеть, что происходит.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('api')
+
+# Глобальная переменная для хранения экземпляра Firebase App
+firebase_app = None
 
 # --- 1. ФУНКЦИЯ ИНИЦИАЛИЗАЦИИ FIREBASE (Ультра-агрессивная очистка) ---
 
 def init_firebase():
     """Инициализирует Firebase Admin SDK, используя переменную окружения."""
+    global firebase_app
     
     key_env_var = 'FIREBASE_SERVICE_ACCOUNT_JSON'
+    key_start_tag = "-----BEGIN PRIVATE KEY-----"
     
-    if key_env_var not in os.environ:
+    key_json_str = os.environ.get(key_env_var)
+    
+    if not key_json_str:
         logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная окружения '{key_env_var}' не найдена.")
         sys.exit(1)
 
     try:
-        # 1. Считывание всей строки JSON и удаление внешних пробелов.
-        key_json_str = os.environ[key_env_var].strip()
+        # 1. АГРЕССИВНАЯ ОЧИСТКА ВНЕШНЕЙ JSON-СТРОКИ
+        # Удаляем ВСЕ непечатные символы (включая BOM), чтобы избежать InvalidByte(2, 46) 
+        # на уровне парсинга JSON или на уровне ключа.
         
+        # Сначала используем strip() для удаления пробелов, затем кодируем/декодируем
+        # для фильтрации непечатаемых управляющих символов (контрольных символов).
+        # Однако, самый надежный способ – это найти начало JSON ({) и обрезать все перед ним.
+        
+        # Находим первое вхождение '{' и обрезаем строку.
+        start_index = key_json_str.find('{')
+        if start_index == -1:
+             logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось найти начало JSON-объекта (знак '{').")
+             sys.exit(1)
+        
+        key_json_str_cleaned = key_json_str[start_index:].strip()
+
         # 2. Парсинг JSON
-        service_account_info = json.loads(key_json_str)
+        service_account_info = json.loads(key_json_str_cleaned)
 
         private_key = service_account_info.get('private_key')
         
@@ -34,22 +53,20 @@ def init_firebase():
              logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Поле 'private_key' отсутствует в JSON.")
              sys.exit(1)
 
-        # 3. Двойная очистка PEM-ключа:
+        # 3. ДВОЙНАЯ ОЧИСТКА ПРИВАТНОГО КЛЮЧА
         
-        # 3.1. Замена экранированных переводов строк и удаление внешних пробелов.
+        # 3.1. Замена экранированных переводов строк на фактические.
         cleaned_key = private_key.strip().replace('\\n', '\n')
         
-        # 3.2. Ультра-агрессивная очистка: ищем начало PEM-ключа 
-        # и удаляем ВСЕ, что стоит перед ним. Это должно устранить 
-        # непечатные байты, добавляемые хостингом (как InvalidByte(2, 46)).
-        key_start_tag = "-----BEGIN PRIVATE KEY-----"
+        # 3.2. Ультра-агрессивная обрезка: ищем тег начала PEM-ключа 
+        # и удаляем ВСЕ, что стоит перед ним.
         
         if not cleaned_key.startswith(key_start_tag):
-            start_index = cleaned_key.find(key_start_tag)
+            start_key_index = cleaned_key.find(key_start_tag)
             
-            if start_index != -1:
+            if start_key_index != -1:
                 # Обрезаем все до начала ключа
-                cleaned_key = cleaned_key[start_index:]
+                cleaned_key = cleaned_key[start_key_index:]
                 logger.warning("⚠️ Внимание: Пришлось агрессивно обрезать ключ для удаления мусора перед тегом BEGIN.")
             else:
                 logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось найти начальный тег PEM-ключа, даже после очистки.")
@@ -57,20 +74,20 @@ def init_firebase():
 
         service_account_info['private_key'] = cleaned_key
         
-        # 4. DEBUG: Логируем первую строку ключа для проверки
+        # 4. DEBUG: Логируем начало ключа для проверки
         log_key_line = cleaned_key.splitlines()[0] if cleaned_key.splitlines() else cleaned_key[:50]
         logger.info(f"Private key cleaning successful. Key start check: {log_key_line[:50]}...")
 
         # 5. Создание учетных данных и инициализация Firebase
         cred = credentials.Certificate(service_account_info)
-        initialize_app(cred)
+        firebase_app = initialize_app(cred)
         logger.info("✅ Firebase успешно инициализирован.")
 
     except json.JSONDecodeError as e:
-        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка парсинга JSON: {e}")
+        logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка парсинга JSON (проверьте, что в переменной только чистый JSON): {e}")
         sys.exit(1)
     except ValueError as e:
-        # Логируем точную ошибку из библиотеки для отладки
+        # Это та самая ошибка InvalidData(InvalidByte(2, 46))
         logger.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка инициализации Firebase: {e}")
         sys.exit(1)
     except Exception as e:
