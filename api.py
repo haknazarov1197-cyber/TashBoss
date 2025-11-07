@@ -1,441 +1,276 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Check, Trash2, Edit, X } from 'lucide-react';
+import os
+import sys
+import json
+import logging
+import asyncio
+import time
+from typing import List, Optional, Dict, Any
 
-// URL вашего развернутого бэкенда FastAPI
-const API_BASE_URL = 'https://tashboss.onrender.com';
+# Импорт Firebase Admin SDK
+import firebase_admin
+from firebase_admin import credentials, firestore, initialize_app
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-/**
- * Хук для выполнения fetch-запросов
- * @param {string} url - Относительный путь к эндпоинту
- * @param {string} method - Метод HTTP
- * @param {Object} body - Тело запроса (для POST/PUT)
- * @returns {Promise<Object>}
- */
-const useApiRequest = () => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+# --- Настройка логирования ---
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-  const request = useCallback(async (url, method = 'GET', body = null) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const options = {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      };
+# --- Настройка констант для Firestore ---
+# ВАЖНО: Эти значения должны быть получены динамически в реальном приложении.
+# Используем заглушки, как и в вашем коде.
+APP_ID = 'telegram_clicker_app_id' # Идентификатор вашего приложения/игры
+COLLECTION_NAME = 'player_state' # Коллекция для хранения состояния игроков
 
-      if (body) {
-        options.body = JSON.stringify(body);
-      }
+# --- Глобальные переменные Firebase ---
+db = None
+DEFAULT_STARTING_SCORE = 0
+DEFAULT_CLICKS_PER_TAP = 1
 
-      const response = await fetch(`${API_BASE_URL}${url}`, options);
-      
-      if (response.status === 204) {
-          return null; // Для DELETE
-      }
+# --- Модели Pydantic для данных ---
 
-      const data = await response.json();
+class PlayerState(BaseModel):
+    """Модель состояния игрока для кликера."""
+    user_id: str = Field(..., description="Уникальный ID пользователя Telegram.")
+    score: int = Field(DEFAULT_STARTING_SCORE, description="Текущее количество очков игрока.")
+    clicks_per_tap: int = Field(DEFAULT_CLICKS_PER_TAP, description="Количество очков за одно нажатие.")
+    last_login: Optional[float] = Field(None, description="Временная метка последнего входа/активности.")
 
-      if (!response.ok) {
-        throw new Error(data.detail || `API error: ${response.status}`);
-      }
+class TapResponse(BaseModel):
+    """Ответ после клика."""
+    new_score: int
+    clicks_per_tap: int
 
-      return data;
-    } catch (err) {
-      console.error('API Request Failed:', err);
-      setError(err.message || 'Произошла неизвестная ошибка сети.');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+# --- Функции инициализации Firebase ---
 
-  return { request, loading, error, clearError: () => setError(null) };
-};
+def init_firebase():
+    """Инициализирует Firebase Admin SDK."""
+    global db
+    logging.info("Запуск инициализации Firebase...")
 
-// --- Компонент UI элементов ---
+    try:
+        # Загрузка учетных данных
+        service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+        if not service_account_json:
+            logging.critical("Переменная окружения FIREBASE_SERVICE_ACCOUNT_JSON не установлена.")
+            # Для запуска в среде, где нет переменных окружения, можно вернуть None
+            return 
 
-const Button = ({ children, onClick, className = '', disabled = false, icon: Icon, type = 'button' }) => (
-  <button
-    type={type}
-    onClick={onClick}
-    disabled={disabled}
-    className={`flex items-center justify-center p-2 rounded-lg transition-all duration-200 shadow-md 
-                ${disabled ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'hover:shadow-lg active:scale-[0.98]'}
-                ${className}`}
-  >
-    {Icon && <Icon className="w-5 h-5 mr-1" />}
-    {children}
-  </button>
-);
+        # Парсинг JSON
+        creds_dict = json.loads(service_account_json)
+        
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Замена экранированных '\n' на реальные символы новой строки
+        private_key = creds_dict.get('private_key')
+        if private_key and isinstance(private_key, str):
+            creds_dict['private_key'] = private_key.replace(r'\n', '\n')
+            logging.info("Успешно исправлены экранированные символы новой строки в 'private_key'.")
 
-const LoadingSpinner = () => (
-  <div className="flex justify-center items-center p-4">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-    <span className="ml-3 text-indigo-600">Загрузка...</span>
-  </div>
-);
+        # Создание учетных данных и инициализация приложения
+        cred = credentials.Certificate(creds_dict)
+        try:
+            initialize_app(cred)
+            logging.info("✅ Инициализация Firebase успешно завершена.")
+        except ValueError as e:
+            if "already exists" in str(e):
+                logging.info("Приложение Firebase уже инициализировано, продолжаем.")
+            else:
+                raise e
+        
+        # Получение экземпляра Firestore
+        db = firestore.client()
+        logging.info("Экземпляр Firestore доступен.")
 
-const ErrorMessage = ({ message, onDismiss }) => (
-  <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg shadow-md mb-4 flex justify-between items-center">
-    <p>{message}</p>
-    <button onClick={onDismiss} className="text-red-500 hover:text-red-800">
-      <X className="w-5 h-5" />
-    </button>
-  </div>
-);
-
-
-// --- Компонент одной Задачи ---
-
-const TaskItem = ({ task, onUpdate, onDelete, isUpdating }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description || '');
-
-  const handleSave = () => {
-    if (title.trim() === '') return;
-    onUpdate(task.id, { title, description, is_done: task.is_done });
-    setIsEditing(false);
-  };
-
-  const toggleDone = () => {
-    onUpdate(task.id, { is_done: !task.is_done });
-  };
-
-  return (
-    <div className={`p-4 mb-3 rounded-xl shadow-lg transition-all duration-300
-                    ${task.is_done ? 'bg-gray-100 border-l-8 border-green-500' : 'bg-white border-l-8 border-indigo-400'}
-                    ${isUpdating ? 'opacity-50' : ''}`}
-    >
-      {isEditing ? (
-        // Режим редактирования
-        <div className="flex flex-col space-y-3">
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="p-2 border border-indigo-300 rounded-lg text-lg font-semibold focus:ring-indigo-500 focus:border-indigo-500"
-            placeholder="Заголовок"
-            disabled={isUpdating}
-          />
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="p-2 border border-indigo-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-            placeholder="Описание (необязательно)"
-            rows="3"
-            disabled={isUpdating}
-          />
-          <div className="flex space-x-2 justify-end">
-            <Button 
-                onClick={() => setIsEditing(false)} 
-                className="bg-gray-500 text-white hover:bg-gray-600"
-                disabled={isUpdating}
-                icon={X}
-            >
-              Отмена
-            </Button>
-            <Button 
-                onClick={handleSave} 
-                className="bg-green-500 text-white hover:bg-green-600"
-                disabled={isUpdating || title.trim() === ''}
-                icon={Check}
-            >
-              Сохранить
-            </Button>
-          </div>
-        </div>
-      ) : (
-        // Режим просмотра
-        <div className="flex items-start justify-between">
-          <div 
-            className="flex-1 cursor-pointer" 
-            onClick={toggleDone}
-          >
-            <h3 className={`text-lg font-semibold ${task.is_done ? 'line-through text-gray-500' : 'text-gray-800'}`}>
-              {task.title}
-            </h3>
-            {task.description && (
-              <p className={`text-sm mt-1 text-gray-600 ${task.is_done ? 'line-through text-gray-400' : ''}`}>
-                {task.description}
-              </p>
-            )}
-          </div>
-          
-          <div className="flex space-x-2 ml-4 flex-shrink-0">
-            {/* Кнопка выполнения/отмены */}
-            <Button 
-              onClick={toggleDone} 
-              className={task.is_done ? 'bg-yellow-500 text-white hover:bg-yellow-600' : 'bg-green-500 text-white hover:bg-green-600'}
-              disabled={isUpdating}
-              icon={Check}
-            >
-              {task.is_done ? 'Отменить' : 'Готово'}
-            </Button>
-            
-            {/* Кнопка редактирования */}
-            <Button 
-              onClick={() => setIsEditing(true)} 
-              className="bg-indigo-500 text-white hover:bg-indigo-600"
-              disabled={isUpdating}
-              icon={Edit}
-            >
-              Изменить
-            </Button>
-            
-            {/* Кнопка удаления */}
-            <Button 
-              onClick={() => onDelete(task.id)} 
-              className="bg-red-500 text-white hover:bg-red-600"
-              disabled={isUpdating}
-              icon={Trash2}
-            >
-              Удалить
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+    except Exception as e:
+        logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Детали: {e}")
+        # Не выходим, чтобы API мог работать, но DB будет недоступен
+        db = None
 
 
-// --- Компонент добавления новой Задачи ---
-
-const AddTaskForm = ({ onAddTask, isAdding }) => {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (title.trim() === '') return;
-
-    onAddTask({
-      title: title.trim(),
-      description: description.trim(),
-    });
-
-    // Очистка полей
-    setTitle('');
-    setDescription('');
-  };
-
-  return (
-    <div className="p-6 bg-white rounded-xl shadow-2xl mb-6">
-      <h2 className="text-xl font-bold text-indigo-700 mb-4">Добавить новую задачу</h2>
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Заголовок задачи (обязательно)"
-          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition-shadow"
-          disabled={isAdding}
-        />
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Описание задачи (необязательно)"
-          rows="2"
-          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 resize-none transition-shadow"
-          disabled={isAdding}
-        />
-        <Button 
-          type="submit" 
-          disabled={isAdding || title.trim() === ''}
-          className="w-full bg-indigo-600 text-white hover:bg-indigo-700"
-          icon={Plus}
-        >
-          {isAdding ? 'Добавление...' : 'Добавить Задачу'}
-        </Button>
-      </form>
-    </div>
-  );
-};
-
-
-// --- Главный компонент Приложения ---
-
-const App = () => {
-  const [tasks, setTasks] = useState([]);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [pendingTasks, setPendingTasks] = useState(new Set()); // ID задач, которые в процессе обновления/удаления
-
-  const { request, loading, error, clearError } = useApiRequest();
-
-  // 1. Получение всех задач при загрузке
-  const fetchTasks = useCallback(async () => {
-    try {
-      const data = await request('/tasks');
-      setTasks(data || []);
-    } catch (e) {
-      console.error('Failed to fetch tasks:', e);
-    } finally {
-      setInitialLoading(false);
-    }
-  }, [request]);
-
-  useEffect(() => {
-    fetchTasks();
-  }, [fetchTasks]);
-
-  // 2. Добавление новой задачи
-  const handleAddTask = async (newTaskData) => {
-    try {
-      // Добавляем временный ID для блокировки формы
-      const tempId = 'new-task-temp-' + Date.now(); 
-      setPendingTasks(prev => new Set(prev).add(tempId));
-
-      const createdTask = await request('/tasks', 'POST', newTaskData);
-      
-      // Обновляем список задач
-      setTasks(prevTasks => [createdTask, ...prevTasks]);
-    } catch (e) {
-      // Ошибка будет показана через ErrorMessage
-    } finally {
-      setPendingTasks(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(tempId);
-        return newSet;
-      });
-    }
-  };
-
-  // 3. Обновление существующей задачи
-  const handleUpdateTask = async (id, updates) => {
-    if (pendingTasks.has(id)) return;
-
-    try {
-      setPendingTasks(prev => new Set(prev).add(id));
-      const updatedTask = await request(`/tasks/${id}`, 'PUT', updates);
-      
-      // Обновляем задачу в списке
-      setTasks(prevTasks => 
-        prevTasks.map(task => (task.id === id ? updatedTask : task))
-      );
-    } catch (e) {
-      // Ошибка будет показана через ErrorMessage
-    } finally {
-      setPendingTasks(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(id);
-        return newSet;
-      });
-    }
-  };
-
-  // 4. Удаление задачи
-  const handleDeleteTask = async (id) => {
-    if (pendingTasks.has(id)) return;
+def get_player_doc_ref(user_id: str):
+    """
+    Возвращает ссылку на документ состояния игрока.
+    Путь: /artifacts/{APP_ID}/{COLLECTION_NAME}/{user_id}
+    Или, используя вашу структуру: /artifacts/{APP_ID}/users/{user_id}/player_state/data
+    Для простоты сделаем PlayerState документом, а не коллекцией.
+    Путь: /artifacts/{APP_ID}/player_state/{user_id}
+    """
+    if db is None:
+        return None
     
-    // Подтверждение перед удалением (заменяем window.confirm на простой console log)
-    if (!window.confirm('Вы уверены, что хотите удалить эту задачу?')) {
-        return;
-    }
+    # Используем более простую и логичную структуру для данных игрока
+    return db.collection('artifacts').document(APP_ID).collection(COLLECTION_NAME).document(user_id)
 
-    try {
-      setPendingTasks(prev => new Set(prev).add(id));
-      await request(`/tasks/${id}`, 'DELETE');
-      
-      // Удаляем задачу из списка
-      setTasks(prevTasks => prevTasks.filter(task => task.id !== id));
-    } catch (e) {
-      // Ошибка будет показана через ErrorMessage
-    } finally {
-      setPendingTasks(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(id);
-        return newSet;
-      });
-    }
-  };
-  
-  // Разделение задач на активные и завершенные
-  const activeTasks = tasks.filter(task => !task.is_done);
-  const completedTasks = tasks.filter(task => task.is_done);
-  
-  const isAdding = pendingTasks.has(tasks.find(t => t.id && t.id.startsWith('new-task-temp'))?.id);
+# --- Настройка FastAPI ---
 
-  return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-8 font-sans">
-      <script src="https://cdn.tailwindcss.com"></script>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-      `}</style>
+app = FastAPI(title="Telegram Clicker Game API (FastAPI + Firestore)")
 
-      <div className="max-w-4xl mx-auto">
-        <header className="text-center py-6 mb-6 bg-white rounded-xl shadow-lg">
-          <h1 className="text-4xl font-extrabold text-indigo-700">
-            Task Manager
-          </h1>
-          <p className="text-gray-500 mt-2">
-            FastAPI (Python) + Firestore + React
-          </p>
-        </header>
+# Настройка CORS (нужно для Telegram Mini App, работающего на стороннем домене)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Разрешаем все источники, так как Mini App запускается с динамического URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup_event():
+    """Вызывается при запуске приложения."""
+    logging.info("Начало этапа lifespan: Запуск функции init_firebase...")
+    await asyncio.to_thread(init_firebase)
+
+
+# --- Пути API (Endpoints) ---
+
+@app.get("/", status_code=status.HTTP_200_OK)
+async def health_check():
+    """Проверка состояния сервиса и доступности DB."""
+    if db is None:
+         # Возвращаем 503, если Firebase не инициализирован
+         raise HTTPException(
+             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+             detail="API is operational, but Firebase Admin SDK failed to initialize."
+         )
+    try:
+        # Простой тест доступности Firestore (получение не существующего пути)
+        db.collection("health_check").document("test").get()
+        return {"status": "ok", "message": "API is operational and Firebase connected."}
+    except Exception as e:
+        logging.error(f"Health check failed due to Firestore connection error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"API is operational but Firestore connection failed during check: {e}"
+        )
+
+
+@app.get("/state/{user_id}", response_model=PlayerState)
+async def get_player_state(user_id: str):
+    """Получает текущее состояние игрока по его ID. Если игрок не найден, создает начальное состояние."""
+    player_ref = get_player_doc_ref(user_id)
+    if player_ref is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
+
+    try:
+        doc = player_ref.get()
+        current_time = time.time()
         
-        {error && <ErrorMessage message={`Ошибка API: ${error}`} onDismiss={clearError} />}
-        
-        {/* Форма добавления */}
-        <AddTaskForm onAddTask={handleAddTask} isAdding={isAdding} />
+        if doc.exists:
+            # Игрок найден, обновляем время последнего входа
+            state_data = doc.to_dict()
+            player_ref.update({"last_login": current_time})
+            return PlayerState(user_id=user_id, **state_data)
+        else:
+            # Игрок не найден, создаем новое начальное состояние
+            new_state = PlayerState(
+                user_id=user_id,
+                score=DEFAULT_STARTING_SCORE,
+                clicks_per_tap=DEFAULT_CLICKS_PER_TAP,
+                last_login=current_time
+            )
+            player_ref.set(new_state.model_dump())
+            logging.info(f"Создано новое состояние для пользователя {user_id}")
+            return new_state
 
-        {/* Индикатор загрузки при первом запуске */}
-        {initialLoading && <LoadingSpinner />}
-        
-        {/* Основной список задач */}
-        <div className="space-y-6">
-          {/* Активные задачи */}
-          <div className="bg-white p-6 rounded-xl shadow-2xl">
-            <h2 className="text-2xl font-bold text-indigo-700 mb-4 flex items-center">
-              Активные Задачи ({activeTasks.length})
-            </h2>
-            {activeTasks.length === 0 && !initialLoading && (
-              <p className="text-gray-500 italic">Нет активных задач. Время создать что-то новое!</p>
-            )}
-            <div className="space-y-3">
-              {activeTasks.map(task => (
-                <TaskItem
-                  key={task.id}
-                  task={task}
-                  onUpdate={handleUpdateTask}
-                  onDelete={handleDeleteTask}
-                  isUpdating={pendingTasks.has(task.id)}
-                />
-              ))}
-            </div>
-          </div>
+    except Exception as e:
+        logging.error(f"Ошибка получения/создания состояния игрока {user_id}: {e}")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось получить или создать состояние игрока.")
 
-          {/* Завершенные задачи */}
-          <div className="bg-white p-6 rounded-xl shadow-2xl opacity-70">
-            <h2 className="text-2xl font-bold text-green-700 mb-4">
-              Завершенные ({completedTasks.length})
-            </h2>
-            <div className="space-y-3">
-              {completedTasks.map(task => (
-                <TaskItem
-                  key={task.id}
-                  task={task}
-                  onUpdate={handleUpdateTask}
-                  onDelete={handleDeleteTask}
-                  isUpdating={pendingTasks.has(task.id)}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-        
-        {/* Индикатор общих операций */}
-        {loading && !initialLoading && (
-            <div className="fixed bottom-4 right-4 bg-indigo-600 text-white py-2 px-4 rounded-full shadow-xl">
-                Выполнение операции...
-            </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
-export default App;
+@app.post("/tap/{user_id}", response_model=TapResponse)
+async def handle_tap(user_id: str):
+    """
+    Обрабатывает клик от пользователя, атомарно обновляет счет в Firestore.
+    Использует `update` с транзакцией или инкрементом для безопасности.
+    """
+    player_ref = get_player_doc_ref(user_id)
+    if player_ref is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
+
+    try:
+        # Используем транзакцию для атомарного обновления, чтобы избежать гонки данных
+        
+        @firestore.transactional
+        def update_in_transaction(transaction, player_ref):
+            """Функция транзакции: читает, обновляет, записывает."""
+            snapshot = player_ref.get(transaction=transaction)
+            
+            if not snapshot.exists:
+                # Если игрок не существует, создаем его (это должно быть предотвращено GET запросом, но на всякий случай)
+                new_state = PlayerState(
+                    user_id=user_id,
+                    score=DEFAULT_STARTING_SCORE,
+                    clicks_per_tap=DEFAULT_CLICKS_PER_TAP,
+                    last_login=time.time()
+                )
+                transaction.set(player_ref, new_state.model_dump())
+                current_score = new_state.score
+                clicks_per_tap = new_state.clicks_per_tap
+            else:
+                state_data = snapshot.to_dict()
+                clicks_per_tap = state_data.get('clicks_per_tap', DEFAULT_CLICKS_PER_TAP)
+                current_score = state_data.get('score', DEFAULT_STARTING_SCORE)
+                
+                new_score = current_score + clicks_per_tap
+                
+                # Обновляем документ в транзакции
+                transaction.update(player_ref, {
+                    'score': new_score,
+                    'last_login': time.time()
+                })
+                current_score = new_score
+            
+            return current_score, clicks_per_tap
+
+        new_score, clicks_per_tap = db.run_transaction(lambda t: update_in_transaction(t, player_ref))
+
+        return TapResponse(new_score=new_score, clicks_per_tap=clicks_per_tap)
+
+    except Exception as e:
+        logging.error(f"Ошибка обработки клика для пользователя {user_id}: {e}")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обработать клик.")
+
+
+@app.post("/upgrade/{user_id}")
+async def buy_upgrade(user_id: str):
+    """Обрабатывает покупку простого улучшения (увеличение Clicks Per Tap)."""
+    player_ref = get_player_doc_ref(user_id)
+    if player_ref is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
+
+    UPGRADE_COST = 100 
+    
+    try:
+        @firestore.transactional
+        def upgrade_transaction(transaction, player_ref):
+            snapshot = player_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Игрок не найден.")
+            
+            state_data = snapshot.to_dict()
+            current_score = state_data.get('score', DEFAULT_STARTING_SCORE)
+            current_cpt = state_data.get('clicks_per_tap', DEFAULT_CLICKS_PER_TAP)
+
+            if current_score < UPGRADE_COST:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Недостаточно очков для покупки улучшения.")
+            
+            # Применяем улучшение
+            new_score = current_score - UPGRADE_COST
+            new_cpt = current_cpt + 1
+            
+            transaction.update(player_ref, {
+                'score': new_score,
+                'clicks_per_tap': new_cpt,
+                'last_login': time.time()
+            })
+            return new_score, new_cpt
+
+        new_score, new_cpt = db.run_transaction(lambda t: upgrade_transaction(t, player_ref))
+        
+        return {"status": "success", "new_score": new_score, "new_clicks_per_tap": new_cpt}
+
+    except HTTPException:
+        raise # Пробрасываем HTTP-исключения
+    except Exception as e:
+        logging.error(f"Ошибка покупки улучшения для пользователя {user_id}: {e}")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось купить улучшение.")
