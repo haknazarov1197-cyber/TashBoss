@@ -1,541 +1,556 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss Mini App</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Inter Font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <!-- Telegram Mini App Script -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        :root {
-            --tg-theme-bg-color: #f7f7f7;
-            --tg-theme-text-color: #000000;
-        }
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--tg-theme-bg-color, #f7f7f7);
-            color: var(--tg-theme-text-color, #000000);
-            transition: background-color 0.3s, color 0.3s;
-        }
-        /* Dark Mode support for Telegram theme */
-        @media (prefers-color-scheme: dark) {
-            body {
-                background-color: var(--tg-theme-bg-color, #1a1a1a);
-                color: var(--tg-theme-text-color, #ffffff);
-            }
-        }
-        .app-container {
-            max-width: 600px;
-            min-height: 100vh;
-            margin: 0 auto;
-            padding: 1rem;
-        }
-        .header-card {
-            background-color: var(--tg-theme-secondary-bg-color, #e0e0e0);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
-            border: 1px solid var(--tg-theme-hint-color, #aaaaaa);
-        }
-        .industry-card {
-            background-color: var(--tg-theme-secondary-bg-color, #e0e0e0);
-        }
-        .btn-primary {
-            background-color: var(--tg-theme-button-color, #007bff);
-            color: var(--tg-theme-button-text-color, #ffffff);
-            transition: transform 0.1s;
-        }
-        .btn-primary:active {
-            transform: scale(0.98);
-        }
-        .pulse-animation {
-            animation: pulse 1.5s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-        }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TashBoss Mini App</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Telegram Mini App Script -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --tg-theme-bg-color: #f7f7f7;
+            --tg-theme-text-color: #000000;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--tg-theme-bg-color, #f7f7f7);
+            color: var(--tg-theme-text-color, #000000);
+            transition: background-color 0.3s, color 0.3s;
+        }
+        /* Dark Mode support for Telegram theme */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: var(--tg-theme-bg-color, #1a1a1a);
+                color: var(--tg-theme-text-color, #ffffff);
+            }
+        }
+        .app-container {
+            max-width: 600px;
+            min-height: 100vh;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+        .header-card {
+            background-color: var(--tg-theme-secondary-bg-color, #e0e0e0);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
+            border: 1px solid var(--tg-theme-hint-color, #aaaaaa);
+        }
+        .industry-card {
+            background-color: var(--tg-theme-secondary-bg-color, #e0e0e0);
+        }
+        .btn-primary {
+            background-color: var(--tg-theme-button-color, #007bff);
+            color: var(--tg-theme-button-text-color, #ffffff);
+            transition: transform 0.1s;
+        }
+        .btn-primary:active {
+            transform: scale(0.98);
+        }
+        .pulse-animation {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+    </style>
 </head>
 <body>
 
 <div class="app-container">
-    <!-- Header: Score and Production -->
-    <!-- ИНДИКАТОР ЗАГРУЗКИ: Должен быть видимым по умолчанию -->
-    <div id="loading-indicator" class="text-center py-10">
-        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-tg-theme-text-color mx-auto"></div>
-        <p class="mt-4 text-tg-theme-hint-color">Загрузка данных...</p>
-    </div>
+    <!-- Header: Score and Production -->
+    <!-- ИНДИКАТОР ЗАГРУЗКИ: Должен быть видимым по умолчанию -->
+    <div id="loading-indicator" class="text-center py-10">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-tg-theme-text-color mx-auto"></div>
+        <p class="mt-4 text-tg-theme-hint-color">Загрузка данных...</p>
+    </div>
 
-    <!-- ОСНОВНОЕ СОДЕРЖАНИЕ: Скрыто по умолчанию -->
-    <div id="main-content" class="hidden space-y-6">
-        <div class="header-card p-4 rounded-xl shadow-lg">
-            <h1 class="text-2xl font-extrabold mb-2 text-tg-theme-text-color">TashBoss 🏗️</h1>
-            <div class="flex justify-between items-center mb-4">
-                <div>
-                    <p class="text-sm text-tg-theme-hint-color">Валюта (BSS)</p>
-                    <p id="player-score" class="text-4xl font-black text-tg-theme-text-color">0</p>
-                </div>
-                <div>
-                    <p class="text-sm text-tg-theme-hint-color text-right">Производство (доход/цикл)</p>
-                    <p id="total-production" class="text-2xl font-bold text-green-500 text-right">0</p>
-                </div>
-            </div>
+    <!-- ОСНОВНОЕ СОДЕРЖАНИЕ: Скрыто по умолчанию -->
+    <div id="main-content" class="hidden space-y-6">
+        <div class="header-card p-4 rounded-xl shadow-lg">
+            <h1 class="text-2xl font-extrabold mb-2 text-tg-theme-text-color">TashBoss 🏗️</h1>
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <p class="text-sm text-tg-theme-hint-color">Валюта (BSS)</p>
+                    <p id="player-score" class="text-4xl font-black text-tg-theme-text-color">0</p>
+                </div>
+                <div>
+                    <p class="text-sm text-tg-theme-hint-color text-right">Производство (доход/цикл)</p>
+                    <p id="total-production" class="text-2xl font-bold text-green-500 text-right">0</p>
+                </div>
+            </div>
 
-            <!-- Accumulated Profit and Collect Button -->
-            <div id="collect-area" class="bg-yellow-500/10 p-3 rounded-lg flex justify-between items-center transition-all duration-300">
-                <div class="flex items-center">
-                    <span class="text-yellow-500 mr-2 text-lg">💰</span>
-                    <span class="text-sm font-semibold text-tg-theme-text-color">Накоплено: <span id="accumulated-profit-display" class="font-bold text-lg">0</span> BSS</span>
-                </div>
-                <button id="collect-button" onclick="collectProfit()" class="btn-primary px-4 py-2 text-sm font-bold rounded-full transition-transform duration-100 disabled:opacity-50" disabled>
-                    Собрать
-                </button>
-            </div>
-            <!-- User ID for Debugging/Sharing -->
-            <p class="text-xs text-tg-theme-hint-color mt-3">Ваш ID: <span id="user-id-display"></span></p>
+            <!-- Accumulated Profit and Collect Button -->
+            <div id="collect-area" class="bg-yellow-500/10 p-3 rounded-lg flex justify-between items-center transition-all duration-300">
+                <div class="flex items-center">
+                    <span class="text-yellow-500 mr-2 text-lg">💰</span>
+                    <span class="text-sm font-semibold text-tg-theme-text-color">Накоплено: <span id="accumulated-profit-display" class="font-bold text-lg">0</span> BSS</span>
+                </div>
+                <button id="collect-button" onclick="collectProfit()" class="btn-primary px-4 py-2 text-sm font-bold rounded-full transition-transform duration-100 disabled:opacity-50" disabled>
+                    Собрать
+                </button>
+            </div>
+            <!-- User ID for Debugging/Sharing -->
+            <p class="text-xs text-tg-theme-hint-color mt-3">Ваш ID: <span id="user-id-display"></span></p>
 
-        </div>
+        </div>
 
-        <!-- My Industries Section -->
-        <section>
-            <h2 class="text-xl font-bold mb-3 mt-4 text-tg-theme-text-color">Мои Отрасли</h2>
-            <div id="owned-industries-list" class="space-y-3">
-                <!-- Owned industries cards will be injected here -->
-                <p id="no-industries-msg" class="text-tg-theme-hint-color text-sm">У вас пока нет купленных отраслей. Купите что-нибудь ниже!</p>
-            </div>
-        </section>
+        <!-- My Industries Section -->
+        <section>
+            <h2 class="text-xl font-bold mb-3 mt-4 text-tg-theme-text-color">Мои Отрасли</h2>
+            <div id="owned-industries-list" class="space-y-3">
+                <!-- Owned industries cards will be injected here -->
+                <p id="no-industries-msg" class="text-tg-theme-hint-color text-sm">У вас пока нет купленных отраслей. Купите что-нибудь ниже!</p>
+            </div>
+        </section>
 
-        <!-- Available Industries Section -->
-        <section>
-            <h2 class="text-xl font-bold mb-3 mt-6 text-tg-theme-text-color">Доступные для Покупки</h2>
-            <div id="available-industries-list" class="space-y-3">
-                <!-- Available industries cards will be injected here -->
-            </div>
-        </section>
-    </div>
+        <!-- Available Industries Section -->
+        <section>
+            <h2 class="text-xl font-bold mb-3 mt-6 text-tg-theme-text-color">Доступные для Покупки</h2>
+            <div id="available-industries-list" class="space-y-3">
+                <!-- Available industries cards will be injected here -->
+            </div>
+        </section>
+    </div>
 
-    <!-- Message Box (replaces alert/confirm) -->
-    <div id="message-box" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 z-50">
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl max-w-sm w-full space-y-4">
-            <h3 id="message-title" class="text-lg font-bold text-tg-theme-text-color">Успех</h3>
-            <p id="message-body" class="text-sm text-tg-theme-text-color"></p>
-            <button onclick="document.getElementById('message-box').classList.add('hidden'); document.getElementById('message-box').classList.remove('flex');" class="btn-primary w-full py-2 rounded-lg font-semibold">
-                Закрыть
-            </button>
-        </div>
-    </div>
+    <!-- Message Box (replaces alert/confirm) -->
+    <div id="message-box" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl max-w-sm w-full space-y-4">
+            <h3 id="message-title" class="text-lg font-bold text-tg-theme-text-color">Успех</h3>
+            <p id="message-body" class="text-sm text-tg-theme-text-color"></p>
+            <button onclick="document.getElementById('message-box').classList.add('hidden'); document.getElementById('message-box').classList.remove('flex');" class="btn-primary w-full py-2 rounded-lg font-semibold">
+                Закрыть
+            </button>
+            
+        </div>
+    </div>
 </div>
 
 <script>
-    // Constants and Global State
-    const BASE_URL = window.location.origin; // Dynamically use the current host
-    // Глобальный таймаут для запросов к API (30 секунд, достаточно для "холодного старта" Render)
-    const API_TIMEOUT_MS = 30000; 
+    // Constants and Global State
+    const BASE_URL = window.location.origin; // Dynamically use the current host
+    // Глобальный таймаут для запросов к API (30 секунд, достаточно для "холодного старта" Render)
+    const API_TIMEOUT_MS = 30000; 
 
-    let userId = null;
-    let playerState = {};
-    let masterData = [];
-    let accumulationLoopInterval = null;
+    let userId = null;
+    let playerState = {};
+    let masterData = [];
+    let accumulationLoopInterval = null;
 
-    // --- UTILITIES ---
+    // НОВОЕ: Глобальное состояние для визуального накопления (для плавности)
+    let visualAccumulationState = {
+        profit: 0,
+        lastUpdateTime: 0,
+        productionPerSecond: 0,
+    };
 
-    /**
-     * Helper function to safely get an element by ID.
-     * @param {string} id The element ID.
-     * @returns {HTMLElement | null}
-     */
-    function getEl(id) {
-        return document.getElementById(id);
-    }
+    // --- UTILITIES ---
 
-    /**
-     * Shows a custom message box instead of alert.
-     * @param {string} title 
-     * @param {string} body 
-     */
-    function showMessage(title, body) {
-        const msgBox = getEl('message-box');
-        if (msgBox) {
-            getEl('message-title').textContent = title;
-            getEl('message-body').textContent = body;
-            msgBox.classList.remove('hidden');
-            msgBox.classList.add('flex');
-        } else {
-            console.error('Message box element not found!');
-        }
-    }
+    /**
+     * Helper function to safely get an element by ID.
+     * @param {string} id The element ID.
+     * @returns {HTMLElement | null}
+     */
+    function getEl(id) {
+        return document.getElementById(id);
+    }
 
-    /**
-     * Handles API calls with exponential backoff and timeout.
-     * @param {string} endpoint 
-     * @param {string} method 
-     * @param {Object} body 
-     * @param {number} retries 
-     * @returns {Promise<Object>}
-     */
-    async function fetchWithRetry(endpoint, method = 'GET', body = null, retries = 3) {
-        // Убедимся, что BASE_URL использует HTTPS, если мы находимся на Render
-        let url = `${BASE_URL}${endpoint}`;
-        if (url.startsWith('http://tashboss.onrender.com')) {
-            url = url.replace('http:', 'https:');
-        }
+    /**
+     * Shows a custom message box instead of alert.
+     * @param {string} title 
+     * @param {string} body 
+     */
+    function showMessage(title, body) {
+        const msgBox = getEl('message-box');
+        if (msgBox) {
+            getEl('message-title').textContent = title;
+            getEl('message-body').textContent = body;
+            msgBox.classList.remove('hidden');
+            msgBox.classList.add('flex');
+        } else {
+            console.error('Message box element not found!');
+        }
+    }
 
-        for (let i = 0; i < retries; i++) {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    /**
+     * Handles API calls with exponential backoff and timeout.
+     * @param {string} endpoint 
+     * @param {string} method 
+     * @param {Object} body 
+     * @param {number} retries 
+     * @returns {Promise<Object>}
+     */
+    async function fetchWithRetry(endpoint, method = 'GET', body = null, retries = 3) {
+        // Убедимся, что BASE_URL использует HTTPS, если мы находимся на Render
+        let url = `${BASE_URL}${endpoint}`;
+        if (url.startsWith('http://tashboss.onrender.com')) {
+            url = url.replace('http:', 'https:');
+        }
 
-            try {
-                const options = {
-                    method: method,
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    signal: controller.signal // Add the signal for timeout
-                };
+        for (let i = 0; i < retries; i++) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
-                if (body) {
-                    options.body = JSON.stringify(body);
-                }
+            try {
+                const options = {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    signal: controller.signal // Add the signal for timeout
+                };
 
-                const response = await fetch(url, options);
-                clearTimeout(timeoutId);
+                if (body) {
+                    options.body = JSON.stringify(body);
+                }
 
-                if (response.ok) {
-                    return await response.json();
-                }
+                const response = await fetch(url, options);
+                clearTimeout(timeoutId);
 
-                // If it's a 4xx or 5xx error, but not a network error, throw it for handling
-                const errorData = await response.json().catch(() => ({ detail: 'Unknown error or non-JSON response' }));
-                throw new Error(errorData.detail || `HTTP Error: ${response.status} ${response.statusText}`);
+                if (response.ok) {
+                    return await response.json();
+                }
 
-            } catch (error) {
-                clearTimeout(timeoutId);
+                // If it's a 4xx or 5xx error, but not a network error, throw it for handling
+                const errorData = await response.json().catch(() => ({ detail: 'Unknown error or non-JSON response' }));
+                throw new Error(errorData.detail || `HTTP Error: ${response.status} ${response.statusText}`);
 
-                // Handle AbortError specifically (our timeout)
-                if (error.name === 'AbortError') {
-                    error.message = "Таймаут соединения. Сервер (Render) может быть в режиме сна. Повторите попытку.";
-                }
+            } catch (error) {
+                clearTimeout(timeoutId);
 
-                console.error(`Attempt ${i + 1} failed for ${url}:`, error);
-                if (i === retries - 1) {
-                    throw error;
-                }
-                const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-    }
+                // Handle AbortError specifically (our timeout)
+                if (error.name === 'AbortError') {
+                    error.message = "Таймаут соединения. Сервер (Render) может быть в режиме сна. Повторите попытку.";
+                }
 
-    // --- GAME LOGIC ---
+                console.error(`Attempt ${i + 1} failed for ${url}:`, error);
+                if (i === retries - 1) {
+                    throw error;
+                }
+                const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
 
-    /**
-     * Visual accumulation loop (client-side only for smooth UX).
-     */
-    function startAccumulationLoop() {
-        if (accumulationLoopInterval) {
-            clearInterval(accumulationLoopInterval);
-        }
+    // --- GAME LOGIC (ОБНОВЛЕНА) ---
 
-        let totalProductionPerSecond = 0;
-        
-        playerState.industries.forEach(ownedInd => {
-            const masterInd = masterData.find(m => m.id === ownedInd.id);
-            if (masterInd && masterInd.cycle_time_sec > 0) {
-                // Income per cycle / Cycle time = Income per second
-                const incomePerSecond = (masterInd.base_income * ownedInd.level) / masterInd.cycle_time_sec;
-                totalProductionPerSecond += incomePerSecond;
-            }
-        });
+    /**
+     * Visual accumulation loop (client-side only for smooth UX).
+     * Сбрасывает и запускает цикл накопления на основе последних данных playerState.
+     */
+    function startAccumulationLoop() {
+        if (accumulationLoopInterval) {
+            clearInterval(accumulationLoopInterval);
+        }
 
-        // Store this for display/backend check comparison
-        playerState.totalProductionPerSecond = totalProductionPerSecond;
+        // 1. Вычисляем новую суммарную скорость производства (доход в секунду)
+        let totalProductionPerSecond = 0;
+        
+        playerState.industries.forEach(ownedInd => {
+            const masterInd = masterData.find(m => m.id === ownedInd.id);
+            if (masterInd && masterInd.cycle_time_sec > 0) {
+                // Income per cycle / Cycle time = Income per second
+                const incomePerSecond = (masterInd.base_income * ownedInd.level) / masterInd.cycle_time_sec;
+                totalProductionPerSecond += incomePerSecond;
+            }
+        });
 
-        // Display current production per cycle (as calculated by the backend)
-        const totalProductionEl = getEl('total-production');
-        if (totalProductionEl) totalProductionEl.textContent = playerState.total_production;
-        
-        let visualProfit = playerState.accumulated_profit || 0;
-        let lastVisualUpdateTime = Date.now();
-        
-        accumulationLoopInterval = setInterval(() => {
-            const now = Date.now();
-            const timePassed = (now - lastVisualUpdateTime) / 1000; // time in seconds
-            lastVisualUpdateTime = now;
+        // 2. Инициализируем/Сбрасываем визуальное состояние на основе последних данных сервера
+        visualAccumulationState.productionPerSecond = totalProductionPerSecond;
+        visualAccumulationState.profit = playerState.accumulated_profit || 0;
+        visualAccumulationState.lastUpdateTime = Date.now(); // Сбрасываем таймер
+        
+        // Отображаем текущее производство за цикл (значение, полученное с бэкенда)
+        const totalProductionEl = getEl('total-production');
+        if (totalProductionEl) totalProductionEl.textContent = playerState.total_production.toLocaleString('ru-RU');
+        
+        // 3. Запускаем новый цикл обновления
+        accumulationLoopInterval = setInterval(() => {
+            const now = Date.now();
+            // Время, прошедшее с момента последнего визуального обновления, в секундах
+            const timePassed = (now - visualAccumulationState.lastUpdateTime) / 1000; 
+            visualAccumulationState.lastUpdateTime = now; // Обновляем время последнего обновления
 
-            if (totalProductionPerSecond > 0) {
-                visualProfit += totalProductionPerSecond * timePassed;
-            }
+            if (visualAccumulationState.productionPerSecond > 0) {
+                // Накапливаем на основе скорости в секунду и прошедшего времени
+                visualAccumulationState.profit += visualAccumulationState.productionPerSecond * timePassed;
+            }
 
-            const profitInt = Math.floor(visualProfit);
-            const profitDisplayEl = getEl('accumulated-profit-display');
-            const collectBtn = getEl('collect-button');
-            
-            if (profitDisplayEl) profitDisplayEl.textContent = profitInt.toLocaleString('ru-RU');
-            
-            if (collectBtn) {
-                if (profitInt > 0) {
-                    collectBtn.disabled = false;
-                    collectBtn.classList.add('pulse-animation');
-                } else {
-                    collectBtn.disabled = true;
-                    collectBtn.classList.remove('pulse-animation');
-                }
-            }
-        }, 200); // Update every 200ms for smooth animation
-    }
+            const profitInt = Math.floor(visualAccumulationState.profit);
+            const profitDisplayEl = getEl('accumulated-profit-display');
+            const collectBtn = getEl('collect-button');
+            
+            if (profitDisplayEl) profitDisplayEl.textContent = profitInt.toLocaleString('ru-RU');
+            
+            if (collectBtn) {
+                if (profitInt > 0) {
+                    collectBtn.disabled = false;
+                    collectBtn.classList.add('pulse-animation');
+                } else {
+                    collectBtn.disabled = true;
+                    collectBtn.classList.remove('pulse-animation');
+                }
+            }
+        }, 200); // Обновление каждые 200 мс для плавности
+    }
 
-    /**
-     * Collects accumulated profit by calling the /update API.
-     */
-    async function collectProfit() {
-        if (!userId) {
-            showMessage("Ошибка", "Идентификатор пользователя не найден.");
-            return;
-        }
+    /**
+     * Collects accumulated profit by calling the /update API.
+     */
+    async function collectProfit() {
+        if (!userId) {
+            showMessage("Ошибка", "Идентификатор пользователя не найден.");
+            return;
+        }
 
-        const collectBtn = getEl('collect-button');
-        if (collectBtn) {
-            collectBtn.disabled = true;
-            collectBtn.textContent = 'Сбор...';
-        }
+        const collectBtn = getEl('collect-button');
+        if (collectBtn) {
+            collectBtn.disabled = true;
+            collectBtn.textContent = 'Сбор...';
+        }
 
-        try {
-            const data = await fetchWithRetry(`/update/${userId}`, 'POST');
-            playerState = { ...data, accumulated_profit: 0 }; // Backend sends 0 after collect
-            renderUI();
-            
-            // Re-sync visual loop (it will start with 0 visual profit)
-            startAccumulationLoop();
-            
-            showMessage("Успех!", `Вы успешно собрали доход. Ваш новый баланс: ${playerState.score.toLocaleString('ru-RU')} BSS.`);
-        } catch (error) {
-            showMessage("Ошибка сбора", error.message);
-        } finally {
-            if (collectBtn) collectBtn.textContent = 'Собрать';
-        }
-    }
+        try {
+            const data = await fetchWithRetry(`/update/${userId}`, 'POST');
+            
+            // ВАЖНО: При сборе обнуляем накопленный доход на клиенте, чтобы счетчик начал с нуля
+            playerState = { ...data, accumulated_profit: 0 }; 
+            renderUI();
+            
+            // Перезапуск визуального цикла с новыми данными
+            startAccumulationLoop();
+            
+            showMessage("Успех!", `Вы успешно собрали доход. Ваш новый баланс: ${playerState.score.toLocaleString('ru-RU')} BSS.`);
+        } catch (error) {
+            showMessage("Ошибка сбора", error.message);
+        } finally {
+            if (collectBtn) collectBtn.textContent = 'Собрать';
+        }
+    }
 
-    /**
-     * Buys an industry.
-     * @param {string} industryFrontendId The string ID (e.g., 'lemonade_stand')
-     */
-    async function buyIndustry(industryFrontendId) {
-        if (!userId) {
-            showMessage("Ошибка", "Идентификатор пользователя не найден.");
-            return;
-        }
+    /**
+     * Buys an industry.
+     * @param {string} industryFrontendId The string ID (e.g., 'lemonade_stand')
+     */
+    async function buyIndustry(industryFrontendId) {
+        if (!userId) {
+            showMessage("Ошибка", "Идентификатор пользователя не найден.");
+            return;
+        }
 
-        const industry = masterData.find(m => m.frontend_id === industryFrontendId);
-        if (!industry) {
-            showMessage("Ошибка", "Отрасль не найдена.");
-            return;
-        }
+        const industry = masterData.find(m => m.frontend_id === industryFrontendId);
+        if (!industry) {
+            showMessage("Ошибка", "Отрасль не найдена.");
+            return;
+        }
 
-        const btn = getEl(`buy-btn-${industryFrontendId}`);
-        if (btn) {
-            btn.disabled = true;
-            btn.textContent = 'Покупка...';
-        }
+        const btn = getEl(`buy-btn-${industryFrontendId}`);
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Покупка...';
+        }
 
-        try {
-            const data = await fetchWithRetry(`/buy/${userId}/${industryFrontendId}`, 'POST');
-            playerState = { ...data };
-            renderUI();
-            startAccumulationLoop();
-            showMessage("Куплено!", `Вы успешно купили: ${industry.name}.`);
-        } catch (error) {
-            showMessage("Ошибка покупки", error.message);
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = `Купить за ${industry.base_cost.toLocaleString('ru-RU')} BSS`;
-            }
-        }
-    }
-
-
-    // --- UI RENDERERS ---
-
-    /**
-     * Renders the current player score and total production rate.
-     */
-    function renderHeader() {
-        const playerScoreEl = getEl('player-score');
-        if (playerScoreEl) playerScoreEl.textContent = playerState.score.toLocaleString('ru-RU');
-        // Total production is updated and displayed in startAccumulationLoop
-    }
-
-    /**
-     * Renders the list of industries owned by the player.
-     */
-    function renderOwnedIndustries() {
-        const list = getEl('owned-industries-list');
-        if (!list) return;
-
-        list.innerHTML = ''; // Clear existing list
-        const noMsg = getEl('no-industries-msg');
-
-        if (playerState.industries && playerState.industries.length > 0) {
-            if (noMsg) noMsg.classList.add('hidden');
-            playerState.industries.forEach(ownedInd => {
-                const masterInd = masterData.find(m => m.id === ownedInd.id);
-                if (masterInd) {
-                    const html = `
-                        <div class="industry-card p-3 rounded-lg shadow-md border-l-4 border-green-500">
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <p class="text-lg font-semibold">${masterInd.name} (Ур. ${ownedInd.level})</p>
-                                    <p class="text-xs text-tg-theme-hint-color">${masterInd.description}</p>
-                                </div>
-                                <div class="text-right">
-                                    <p class="text-sm font-bold text-green-500">+${(masterInd.base_income * ownedInd.level).toLocaleString('ru-RU')}</p>
-                                    <p class="text-xs text-tg-theme-hint-color">за ${masterInd.cycle_time_sec} сек</p>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                    list.insertAdjacentHTML('beforeend', html);
-                }
-            });
-        } else {
-            if (noMsg) noMsg.classList.remove('hidden');
-        }
-    }
-
-    /**
-     * Renders the list of available industries for purchase.
-     */
-    function renderAvailableIndustries() {
-        const list = getEl('available-industries-list');
-        if (!list) return;
-
-        list.innerHTML = ''; // Clear existing list
-
-        // Get IDs of industries already owned (for filtering)
-        const ownedIds = playerState.industries.map(ind => ind.id);
-
-        masterData.forEach(industry => {
-            const isOwned = ownedIds.includes(industry.id);
-            
-            if (!isOwned) {
-                const canAfford = playerState.score >= industry.base_cost;
-                const buttonClass = canAfford ? 'btn-primary' : 'bg-gray-400 text-gray-700 cursor-not-allowed';
-                const buttonDisabled = canAfford ? '' : 'disabled';
-                
-                const html = `
-                    <div class="industry-card p-4 rounded-xl shadow-md space-y-2 border-l-4 ${canAfford ? 'border-blue-500' : 'border-gray-400'}">
-                        <div class="flex justify-between items-start">
-                            <p class="text-xl font-bold">${industry.name}</p>
-                            <p class="text-sm font-bold text-tg-theme-text-color">Доход: ${industry.base_income.toLocaleString('ru-RU')}</p>
-                        </div>
-                        <p class="text-sm text-tg-theme-hint-color">${industry.description}</p>
-                        <button id="buy-btn-${industry.frontend_id}" 
-                                onclick="buyIndustry('${industry.frontend_id}')" 
-                                class="w-full py-2 rounded-lg font-semibold ${buttonClass}" 
-                                ${buttonDisabled}>
-                            Купить за ${industry.base_cost.toLocaleString('ru-RU')} BSS
-                        </button>
-                    </div>
-                `;
-                list.insertAdjacentHTML('beforeend', html);
-            }
-        });
-    }
-
-    /**
-     * Renders the entire UI based on the current playerState.
-     */
-    function renderUI() {
-        renderHeader();
-        renderOwnedIndustries();
-        renderAvailableIndustries();
-        // startAccumulationLoop is called separately after initial fetch and updates
-        Telegram.WebApp.ready();
-    }
+        try {
+            const data = await fetchWithRetry(`/buy/${userId}/${industryFrontendId}`, 'POST');
+            playerState = { ...data };
+            renderUI();
+            // Перезапуск визуального цикла с новыми данными и новой скоростью
+            startAccumulationLoop();
+            showMessage("Куплено!", `Вы успешно купили: ${industry.name}.`);
+        } catch (error) {
+            showMessage("Ошибка покупки", error.message);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = `Купить за ${industry.base_cost.toLocaleString('ru-RU')} BSS`;
+            }
+        }
+    }
 
 
-    // --- INITIALIZATION ---
+    // --- UI RENDERERS ---
 
-    async function initializeApp() {
-        const loadingIndicator = getEl('loading-indicator');
-        const mainContent = getEl('main-content');
+    /**
+     * Renders the current player score and total production rate.
+     */
+    function renderHeader() {
+        const playerScoreEl = getEl('player-score');
+        if (playerScoreEl) playerScoreEl.textContent = playerState.score.toLocaleString('ru-RU');
+        // Total production is updated and displayed in startAccumulationLoop
+    }
 
-        if (loadingIndicator) loadingIndicator.classList.remove('hidden');
-        if (mainContent) mainContent.classList.add('hidden');
+    /**
+     * Renders the list of industries owned by the player.
+     */
+    function renderOwnedIndustries() {
+        const list = getEl('owned-industries-list');
+        if (!list) return;
 
-        // 1. Check Telegram WebApp init
-        if (typeof Telegram === 'undefined' || !Telegram.WebApp.initDataUnsafe || !Telegram.WebApp.initDataUnsafe.user) {
-            // Fallback for local testing (use a static ID)
-            userId = 'test_user_12345'; 
-            console.warn("Telegram WebApp not initialized. Using fallback user ID.");
-        } else {
-            userId = Telegram.WebApp.initDataUnsafe.user.id.toString();
-            // Set Telegram UI Theme
-            const theme = Telegram.WebApp.themeParams;
-            if (theme) {
-                document.documentElement.style.setProperty('--tg-theme-bg-color', theme.bg_color || '#f7f7f7');
-                document.documentElement.style.setProperty('--tg-theme-text-color', theme.text_color || '#000000');
-                document.documentElement.style.setProperty('--tg-theme-secondary-bg-color', theme.secondary_bg_color || '#e0e0e0');
-                document.documentElement.style.setProperty('--tg-theme-hint-color', theme.hint_color || '#aaaaaa');
-                document.documentElement.style.setProperty('--tg-theme-button-color', theme.button_color || '#007bff');
-                document.documentElement.style.setProperty('--tg-theme-button-text-color', theme.button_text_color || '#ffffff');
-            }
-        }
-        
-        const userIdDisplay = getEl('user-id-display');
-        if (userIdDisplay) userIdDisplay.textContent = userId;
+        list.innerHTML = ''; // Clear existing list
+        const noMsg = getEl('no-industries-msg');
 
-        // 2. Fetch data
-        try {
-            // Fetch Master Data
-            masterData = await fetchWithRetry('/master-data');
-            // Fetch Player State (includes initial accumulated profit)
-            playerState = await fetchWithRetry(`/state/${userId}`);
-            
-            // 3. Render and start loops
-            renderUI();
-            startAccumulationLoop();
+        if (playerState.industries && playerState.industries.length > 0) {
+            if (noMsg) noMsg.classList.add('hidden');
+            playerState.industries.forEach(ownedInd => {
+                const masterInd = masterData.find(m => m.id === ownedInd.id);
+                if (masterInd) {
+                    const html = `
+                        <div class="industry-card p-3 rounded-lg shadow-md border-l-4 border-green-500">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-lg font-semibold">${masterInd.name} (Ур. ${ownedInd.level})</p>
+                                    <p class="text-xs text-tg-theme-hint-color">${masterInd.description}</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-sm font-bold text-green-500">+${(masterInd.base_income * ownedInd.level).toLocaleString('ru-RU')}</p>
+                                    <p class="text-xs text-tg-theme-hint-color">за ${masterInd.cycle_time_sec} сек</p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    list.insertAdjacentHTML('beforeend', html);
+                }
+            });
+        } else {
+            if (noMsg) noMsg.classList.remove('hidden');
+        }
+    }
 
-            // 4. Show content (Safely hide/show)
-            if (loadingIndicator) loadingIndicator.classList.add('hidden');
-            if (mainContent) mainContent.classList.remove('hidden');
-            
-            // 5. Setup Telegram closing button (optional but good practice)
-            Telegram.WebApp.ready();
-            Telegram.WebApp.MainButton.setText("Закрыть Игру");
-            Telegram.WebApp.MainButton.show();
-            Telegram.WebApp.MainButton.onClick(() => Telegram.WebApp.close());
+    /**
+     * Renders the list of available industries for purchase.
+     */
+    function renderAvailableIndustries() {
+        const list = getEl('available-industries-list');
+        if (!list) return;
 
-        } catch (error) {
-            console.error("Initialization failed:", error);
-            // Исправленная логика обработки ошибки
-            let errorMessage = error.message;
-            if (errorMessage.includes("Failed to fetch") || errorMessage.includes("Таймаут") || error.name === 'AbortError') {
-                errorMessage = `Сервер Render спит или недоступен. Пожалуйста, подождите 30 секунд и попробуйте перезапустить приложение. Ошибка: ${error.name || 'Network Error'}`;
-            }
+        list.innerHTML = ''; // Clear existing list
 
-            if (loadingIndicator) {
-                loadingIndicator.innerHTML = `
-                    <h1 class="text-red-500 font-bold">Ошибка загрузки API</h1>
-                    <p class="text-tg-theme-hint-color mt-2 p-2 rounded-lg bg-red-500/10 text-sm">${errorMessage}</p>
-                    <button onclick="initializeApp()" class="btn-primary mt-4 px-4 py-2 rounded-lg">Повторить попытку</button>
-                `;
-            }
-            // Главное содержание остается скрытым, показывается только индикатор с ошибкой
-            if (mainContent) mainContent.classList.add('hidden');
+        // Get IDs of industries already owned (for filtering)
+        const ownedIds = playerState.industries.map(ind => ind.id);
 
-        }
-    }
+        masterData.forEach(industry => {
+            const isOwned = ownedIds.includes(industry.id);
+            
+            if (!isOwned) {
+                const canAfford = playerState.score >= industry.base_cost;
+                const buttonClass = canAfford ? 'btn-primary' : 'bg-gray-400 text-gray-700 cursor-not-allowed';
+                const buttonDisabled = canAfford ? '' : 'disabled';
+                
+                const html = `
+                    <div class="industry-card p-4 rounded-xl shadow-md space-y-2 border-l-4 ${canAfford ? 'border-blue-500' : 'border-gray-400'}">
+                        <div class="flex justify-between items-start">
+                            <p class="text-xl font-bold">${industry.name}</p>
+                            <p class="text-sm font-bold text-tg-theme-text-color">Доход: ${industry.base_income.toLocaleString('ru-RU')}</p>
+                        </div>
+                        <p class="text-sm text-tg-theme-hint-color">${industry.description}</p>
+                        <button id="buy-btn-${industry.frontend_id}" 
+                                onclick="buyIndustry('${industry.frontend_id}')" 
+                                class="w-full py-2 rounded-lg font-semibold ${buttonClass}" 
+                                ${buttonDisabled}>
+                            Купить за ${industry.base_cost.toLocaleString('ru-RU')} BSS
+                        </button>
+                    </div>
+                `;
+                list.insertAdjacentHTML('beforeend', html);
+            }
+        });
+    }
 
-    // Export functions to global scope so they can be called from HTML
-    window.collectProfit = collectProfit;
-    window.buyIndustry = buyIndustry;
+    /**
+     * Renders the entire UI based on the current playerState.
+     */
+    function renderUI() {
+        renderHeader();
+        renderOwnedIndustries();
+        renderAvailableIndustries();
+        // startAccumulationLoop is called separately after initial fetch and updates
+        Telegram.WebApp.ready();
+    }
 
-    // Start the application after the document is loaded
-    window.onload = initializeApp;
+
+    // --- INITIALIZATION ---
+
+    async function initializeApp() {
+        const loadingIndicator = getEl('loading-indicator');
+        const mainContent = getEl('main-content');
+
+        if (loadingIndicator) loadingIndicator.classList.remove('hidden');
+        if (mainContent) mainContent.classList.add('hidden');
+
+        // 1. Check Telegram WebApp init
+        if (typeof Telegram === 'undefined' || !Telegram.WebApp.initDataUnsafe || !Telegram.WebApp.initDataUnsafe.user) {
+            // Fallback for local testing (use a static ID)
+            userId = 'test_user_12345'; 
+            console.warn("Telegram WebApp not initialized. Using fallback user ID.");
+        } else {
+            userId = Telegram.WebApp.initDataUnsafe.user.id.toString();
+            // Set Telegram UI Theme
+            const theme = Telegram.WebApp.themeParams;
+            if (theme) {
+                document.documentElement.style.setProperty('--tg-theme-bg-color', theme.bg_color || '#f7f7f7');
+                document.documentElement.style.setProperty('--tg-theme-text-color', theme.text_color || '#000000');
+                document.documentElement.style.setProperty('--tg-theme-secondary-bg-color', theme.secondary_bg_color || '#e0e0e0');
+                document.documentElement.style.setProperty('--tg-theme-hint-color', theme.hint_color || '#aaaaaa');
+                document.documentElement.style.setProperty('--tg-theme-button-color', theme.button_color || '#007bff');
+                document.documentElement.style.setProperty('--tg-theme-button-text-color', theme.button_text_color || '#ffffff');
+            }
+        }
+        
+        const userIdDisplay = getEl('user-id-display');
+        if (userIdDisplay) userIdDisplay.textContent = userId;
+
+        // 2. Fetch data
+        try {
+            // Fetch Master Data
+            masterData = await fetchWithRetry('/master-data');
+            // Fetch Player State (includes initial accumulated profit)
+            playerState = await fetchWithRetry(`/state/${userId}`);
+            
+            // 3. Render and start loops
+            renderUI();
+            startAccumulationLoop();
+
+            // 4. Show content (Safely hide/show)
+            if (loadingIndicator) loadingIndicator.classList.add('hidden');
+            if (mainContent) mainContent.classList.remove('hidden');
+            
+            // 5. Setup Telegram closing button (optional but good practice)
+            Telegram.WebApp.ready();
+            Telegram.WebApp.MainButton.setText("Закрыть Игру");
+            Telegram.WebApp.MainButton.show();
+            Telegram.WebApp.MainButton.onClick(() => Telegram.WebApp.close());
+
+        } catch (error) {
+            console.error("Initialization failed:", error);
+            // Исправленная логика обработки ошибки
+            let errorMessage = error.message;
+            if (errorMessage.includes("Failed to fetch") || errorMessage.includes("Таймаут") || error.name === 'AbortError') {
+                errorMessage = `Сервер Render спит или недоступен. Пожалуйста, подождите 30 секунд и попробуйте перезапустить приложение. Ошибка: ${error.name || 'Network Error'}`;
+            }
+
+            if (loadingIndicator) {
+                loadingIndicator.innerHTML = `
+                    <h1 class="text-red-500 font-bold">Ошибка загрузки API</h1>
+                    <p class="text-tg-theme-hint-color mt-2 p-2 rounded-lg bg-red-500/10 text-sm">${errorMessage}</p>
+                    <button onclick="initializeApp()" class="btn-primary mt-4 px-4 py-2 rounded-lg">Повторить попытку</button>
+                `;
+            }
+            // Главное содержание остается скрытым, показывается только индикатор с ошибкой
+            if (mainContent) mainContent.classList.add('hidden');
+
+        }
+    }
+
+    // Export functions to global scope so they can be called from HTML
+    window.collectProfit = collectProfit;
+    window.buyIndustry = buyIndustry;
+
+    // Start the application after the document is loaded
+    window.onload = initializeApp;
 
 </script>
 </body>
