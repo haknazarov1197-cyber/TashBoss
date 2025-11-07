@@ -2,14 +2,14 @@ import os
 import json
 import logging
 import asyncio
-import time # Добавлено для работы со временем
+import time 
 from typing import Optional, Any, Dict, List
 from fastapi import FastAPI, Request, status, HTTPException
-# Импортируем HTMLResponse для отдачи фронтенда
 from fastapi.responses import JSONResponse, HTMLResponse 
 import requests
 import firebase_admin
 from firebase_admin import credentials, firestore
+from fastapi.middleware.cors import CORSMiddleware # Добавляем для безопасности
 
 # --------------------------
 # 1. SETUP FIREBASE & LOGGER
@@ -18,7 +18,6 @@ from firebase_admin import credentials, firestore
 # Environment Variables
 FIREBASE_CONFIG_JSON = os.environ.get('FIREBASE_CONFIG')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-# Добавляем APP_ID для корректного пути в Firestore
 APP_ID = os.environ.get('__app_id', 'default-app-id') 
 
 # Setup logging
@@ -28,22 +27,24 @@ logger = logging.getLogger(__name__)
 db = None
 
 def initialize_firebase():
+    """Инициализирует Firebase и Firestore клиент."""
     global db
     try:
-        if FIREBASE_CONFIG_JSON:
+        if db is None and FIREBASE_CONFIG_JSON: # Проверяем, чтобы не инициализировать повторно
             firebase_config = json.loads(FIREBASE_CONFIG_JSON)
             if not firebase_admin._apps:
                 cred = credentials.Certificate(firebase_config)
                 firebase_admin.initialize_app(cred)
                 logger.info("--- Firebase initialized successfully. ---")
             db = firestore.client()
-        else:
+        elif not FIREBASE_CONFIG_JSON:
             logger.error("--- FIREBASE_CONFIG is missing. Firestore will not be available. ---")
     except Exception as e:
         logger.error(f"--- ERROR initializing Firebase: {e} ---")
 
-# Вызываем инициализацию
-initialize_firebase()
+# Удаляем глобальный вызов initialize_firebase(), 
+# чтобы избежать ошибки "Firestore is not initialized."
+
 
 # --------------------------
 # 2. GAME DATA AND SETUP
@@ -79,6 +80,20 @@ initial_player_data = {
 # --------------------------
 app = FastAPI(title="TashBoss Bot API")
 
+# FIX: Используем CORS middleware, чтобы Mini App мог обращаться к API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# FIX: Гарантируем, что инициализация Firebase произойдет при запуске сервера
+@app.on_event("startup")
+async def startup_event():
+    """Гарантирует, что Firestore будет инициализирован до обработки первого запроса."""
+    initialize_firebase()
 
 # --------------------------
 # 4. HELPER FUNCTIONS
@@ -124,7 +139,8 @@ def get_player_doc_ref(user_id: str):
 
 def _fetch_data_sync(user_id: str) -> Dict[str, Any]:
     """Synchronous function to fetch or initialize player data."""
-    if not db:
+    if db is None:
+        # Теперь это должно срабатывать только если initialize_firebase() провалилась
         raise RuntimeError("Firestore is not initialized.")
         
     doc_ref = get_player_doc_ref(user_id)
@@ -136,8 +152,10 @@ def _fetch_data_sync(user_id: str) -> Dict[str, Any]:
         return {**initial_player_data, **data}
     else:
         # Initialize new player
-        doc_ref.set(initial_player_data)
-        return initial_player_data
+        # NOTE: Дадим начальный капитал, чтобы можно было сразу что-то купить.
+        initial_with_score = {**initial_player_data, "score": 500}
+        doc_ref.set(initial_with_score)
+        return initial_with_score
 
 async def get_player_state(user_id: str) -> Dict[str, Any]:
     """Fetches player state asynchronously."""
@@ -146,7 +164,7 @@ async def get_player_state(user_id: str) -> Dict[str, Any]:
 
 def _save_data_sync(user_id: str, data: Dict):
     """Synchronous function to save data."""
-    if not db:
+    if db is None:
         raise RuntimeError("Firestore is not initialized.")
         
     doc_ref = get_player_doc_ref(user_id)
@@ -302,6 +320,12 @@ async def get_state(user_id: str):
         
     except Exception as e:
         logger.error(f"Error retrieving player state {user_id}: {e}")
+        # Проверяем на ошибку инициализации DB, чтобы дать более точный ответ
+        if "Firestore is not initialized" in str(e):
+            raise HTTPException(
+                status_code=500, 
+                detail="Database initialization error. Please try again in a few seconds."
+            )
         raise HTTPException(
             status_code=500, 
             detail=f"Failed to load player state from Firestore. Error: {e}"
@@ -364,6 +388,13 @@ async def buy_industry(user_id: str, industry_id: int):
                 status_code=400, 
                 detail=f"Not enough BossCoin (BSS). Requires {cost}, available {current_score}."
             )
+        
+        # Проверка, не куплена ли уже отрасль
+        if any(ind['id'] == industry_id for ind in player_state["industries"]):
+             raise HTTPException(
+                status_code=400, 
+                detail="Industry already owned. Upgrades are not yet implemented."
+            )
 
         # 1. Списание BSS
         new_score = current_score - cost
@@ -372,8 +403,6 @@ async def buy_industry(user_id: str, industry_id: int):
         new_industry_instance = {
             "id": industry_id,
             "level": 1,
-            # last_collection_time можно не хранить здесь, так как доход рассчитывается 
-            # от общего last_check_time игрока
             "is_responsible_assigned": False, 
             "industry_name": industry_data['name'] 
         }
@@ -384,7 +413,7 @@ async def buy_industry(user_id: str, industry_id: int):
         # 3. Сохранение
         await save_player_state(user_id, player_state)
 
-        # Перерасчет общей производственной мощности
+        # 4. Перерасчет общей производственной мощности
         calculate_accumulated_profit(player_state)
 
         return {
@@ -407,16 +436,14 @@ async def buy_industry(user_id: str, industry_id: int):
 # 8. REMOVING OLD PLACEHOLDERS
 # --------------------------
 
-# Удаляем старые заглушки, чтобы не было конфликта с новыми эндпоинтами
-
 @app.get("/state")
-def remove_old_state(user_id: str):
+def remove_old_state():
     raise HTTPException(status_code=404, detail="Use /state/{user_id} endpoint instead.")
 
 @app.post("/tap")
-def remove_old_tap(user_id: str):
+def remove_old_tap():
     raise HTTPException(status_code=404, detail="Use /collect/{user_id} endpoint instead.")
 
 @app.post("/upgrade")
-def remove_old_upgrade(user_id: str, upgrade_type: str):
+def remove_old_upgrade():
     raise HTTPException(status_code=404, detail="Use /buy/{user_id}/{industry_id} for purchasing industries instead.")
