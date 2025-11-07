@@ -1,27 +1,27 @@
 import os
 import json
+import asyncio
 from typing import Dict
 from fastapi import FastAPI, HTTPException
-from firebase_admin import initialize_app, firestore, credentials
+# Для работы с firebase-admin необходимо, чтобы библиотека была установлена
+from firebase_admin import initialize_app, firestore, credentials 
 
 # --- КОНФИГУРАЦИЯ FIREBASE ---
-# Переменные, предоставленные средой Canvas, для доступа к Firestore
+# Переменные, предоставленные средой Canvas
 FIREBASE_CONFIG_JSON = os.environ.get('__firebase_config')
 APP_ID = os.environ.get('__app_id', 'default-app-id') 
 
-# Глобальные переменные для Firestore и базы данных
 db = None
 app = None
 API_INITIALIZED = False
 
-# Инициализация данных для нового игрока
 initial_player_data = {
     "score": 0,
     "clicks_per_tap": 1
 }
 
 def initialize_firebase():
-    """Инициализирует Firebase/Firestore, используя предоставленный конфиг."""
+    """Инициализирует Firebase/Firestore."""
     global db, app, API_INITIALIZED
     
     if API_INITIALIZED:
@@ -30,25 +30,25 @@ def initialize_firebase():
     print("--- Попытка инициализации Firebase ---")
     if not FIREBASE_CONFIG_JSON:
         print("ОШИБКА: Переменная __firebase_config не найдена.")
-        # Для локального тестирования можно использовать анонимные учетные данные, 
-        # но в Canvas это должно быть предоставлено.
         raise RuntimeError("Firebase config не предоставлен в среде.")
 
     try:
         config_data = json.loads(FIREBASE_CONFIG_JSON)
-        
-        # Используем Service Account для аутентификации на стороне сервера (FastAPI)
-        # В Canvas конфигурация включает Service Account key
         cred = credentials.Certificate(config_data)
         
+        # Инициализация приложения Firebase
         app = initialize_app(cred)
         db = firestore.client()
         API_INITIALIZED = True
+        
+        # КРИТИЧНО ВАЖНЫЙ ВЫВОД: Project ID
+        project_id = config_data.get('project_id', 'НЕИЗВЕСТЕН')
+        print(f"--- ИСПОЛЬЗУЕМЫЙ PROJECT ID FIREBASE: {project_id} ---")
         print(f"УСПЕХ: Firebase инициализирован. ID приложения: {APP_ID}")
         
     except Exception as e:
         print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase. {e}")
-        # Вызов исключения приведет к сбою сервера, что уведомит о проблеме
+        # Вызываем исключение, чтобы сервер упал, если инициализация не удалась
         raise RuntimeError(f"Не удалось инициализировать Firestore: {e}")
 
 # Инициализируем FastAPI и Firebase
@@ -56,31 +56,42 @@ app = FastAPI()
 initialize_firebase()
 
 
-# --- Вспомогательные функции для Firestore ---
+# --- Вспомогательные функции для Firestore с асинхронной оберткой ---
+# Эти функции используют run_in_executor для корректного выполнения синхронных 
+# вызовов Firestore внутри асинхронной среды FastAPI.
 
 def get_player_doc_ref(user_id: str):
-    """Возвращает ссылку на документ игрока в соответствии с правилами безопасности."""
-    # Путь для частных данных: /artifacts/{appId}/users/{userId}/game_state/player_doc
+    """Возвращает ссылку на документ игрока."""
     return db.collection(
         'artifacts', APP_ID, 'users', user_id, 'game_state'
     ).document('player_doc')
 
-async def get_player_state(user_id: str) -> Dict:
-    """Получает состояние игрока или инициализирует его, если оно не существует."""
+def _fetch_data_sync(user_id: str):
+    """Синхронная функция получения данных (для выполнения в Executor)."""
     doc_ref = get_player_doc_ref(user_id)
     doc = doc_ref.get()
-
+    
     if doc.exists:
         return doc.to_dict()
     else:
-        # Инициализация нового игрока
-        await doc_ref.set(initial_player_data)
+        # Инициализация нового игрока (тоже синхронный вызов)
+        doc_ref.set(initial_player_data)
         return initial_player_data
 
-async def save_player_state(user_id: str, data: Dict):
-    """Сохраняет состояние игрока."""
+async def get_player_state(user_id: str) -> Dict:
+    """Получает состояние игрока, выполняя синхронный вызов асинхронно."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _fetch_data_sync, user_id)
+
+def _save_data_sync(user_id: str, data: Dict):
+    """Синхронная функция сохранения данных."""
     doc_ref = get_player_doc_ref(user_id)
-    await doc_ref.set(data) # Используем set для перезаписи/обновления
+    doc_ref.set(data)
+
+async def save_player_state(user_id: str, data: Dict):
+    """Сохраняет состояние игрока, выполняя синхронный вызов асинхронно."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _save_data_sync, user_id, data)
 
 
 # --- ЭНДПОИНТЫ API ---
@@ -135,13 +146,11 @@ async def buy_upgrade(user_id: str):
         current_cpt = current_state["clicks_per_tap"]
 
         if current_score < UPGRADE_COST:
-            # Ошибка, если недостаточно очков
             raise HTTPException(
                 status_code=400, 
                 detail=f"Недостаточно очков. Требуется {UPGRADE_COST}, доступно {current_score}."
             )
 
-        # Выполняем покупку
         new_score = current_score - UPGRADE_COST
         new_cpt = current_cpt + 1
 
@@ -153,13 +162,12 @@ async def buy_upgrade(user_id: str):
         return {"new_score": new_score, "new_clicks_per_tap": new_cpt}
 
     except HTTPException as http_exc:
-        # Пробрасываем HTTP-исключения без изменения
         raise http_exc
         
     except Exception as e:
         print(f"Ошибка при покупке улучшения для {user_id}: {e}")
-        # ЭТО БЫЛА ИСПРАВЛЕННАЯ ЧАСТЬ: добавление `detail`
         raise HTTPException(
             status_code=500, 
             detail=f"Не удалось купить улучшение. Ошибка: {e}"
         )
+    
