@@ -4,15 +4,17 @@ import asyncio
 from typing import Dict
 from fastapi import FastAPI, HTTPException
 # Для работы с firebase-admin необходимо, чтобы библиотека была установлена
-from firebase_admin import initialize_app, firestore, credentials 
+from firebase_admin import initialize_app, firestore, credentials
 
 # --- КОНФИГУРАЦИЯ FIREBASE ---
 # Переменные, предоставленные средой Canvas
 FIREBASE_CONFIG_JSON = os.environ.get('__firebase_config')
-APP_ID = os.environ.get('__app_id', 'default-app-id') 
+APP_ID = os.environ.get('__app_id', 'default-app-id')
 
 db = None
-app = None
+# Используем firebase_app для экземпляра Firebase Admin SDK
+firebase_app = None 
+# Переменная 'app' будет использоваться для FastAPI
 API_INITIALIZED = False
 
 initial_player_data = {
@@ -22,7 +24,8 @@ initial_player_data = {
 
 def initialize_firebase():
     """Инициализирует Firebase/Firestore."""
-    global db, app, API_INITIALIZED
+    # Изменяем глобальный список, чтобы избежать перезаписи FastAPI app
+    global db, firebase_app, API_INITIALIZED
     
     if API_INITIALIZED:
         return
@@ -36,8 +39,8 @@ def initialize_firebase():
         config_data = json.loads(FIREBASE_CONFIG_JSON)
         cred = credentials.Certificate(config_data)
         
-        # Инициализация приложения Firebase
-        app = initialize_app(cred)
+        # Инициализация приложения Firebase (используем firebase_app, чтобы не перезаписать FastAPI app)
+        firebase_app = initialize_app(cred)
         db = firestore.client()
         API_INITIALIZED = True
         
@@ -170,4 +173,3 @@ async def buy_upgrade(user_id: str):
             status_code=500, 
             detail=f"Не удалось купить улучшение. Ошибка: {e}"
         )
-    
