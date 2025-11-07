@@ -3,618 +3,735 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss Clicker - ТашКлик</title>
+    <title>TashBoss: Симулятор Управления Городом</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        /* Общие стили */
         :root {
-            --primary-color: #4f46e5;
-            --secondary-color: #8b5cf6;
-            --success-color: #10b981;
-            --warning-color: #f59e0b;
-            --error-color: #ef4444;
-            --background-dark: #1f2937;
-            --background-light: #f3f4f6;
-            --text-color: #d1d5db;
+            --color-primary: #1E40AF; /* Tailwind blue-700 */
+            --color-secondary: #059669; /* Tailwind emerald-600 */
+            --color-bg: #F3F4F6; /* Tailwind gray-100 */
+            --color-card: #FFFFFF;
         }
+
         body {
+            background-color: var(--color-bg);
             font-family: 'Inter', sans-serif;
-            background-color: var(--background-dark);
-            color: var(--text-color);
-            transition: all 0.3s ease;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            padding: 20px;
+            margin: 0;
+            padding: 0;
         }
-        .container {
-            width: 100%;
-            max-width: 420px;
-            background-color: #374151;
-            border-radius: 1.5rem;
-            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
-            padding: 1.5rem;
+
+        /* Адаптивный контейнер для игры */
+        .game-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem;
         }
-        .clickable-area {
-            position: relative;
-            cursor: pointer;
-            user-select: none;
-            touch-action: manipulation;
-            transition: transform 0.1s ease;
-        }
-        .clickable-area:active {
-            transform: scale(0.98);
-        }
-        .pulse-effect {
-            animation: pulse-ring 0.6s cubic-bezier(0, 0, 0.2, 1) forwards;
-        }
-        @keyframes pulse-ring {
-            0% { transform: scale(1); opacity: 0.7; }
-            100% { transform: scale(1.5); opacity: 0; }
-        }
-        .click-animation {
-            position: absolute;
-            pointer-events: none;
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: var(--warning-color);
-            opacity: 1;
-            animation: click-fly 0.8s ease-out forwards;
-            z-index: 100;
-        }
-        @keyframes click-fly {
-            0% { transform: translateY(0); opacity: 1; }
-            100% { transform: translateY(-50px); opacity: 0; }
-        }
-        .status-bar {
-            border-radius: 0.75rem;
+
+        /* Стиль кнопки */
+        .btn {
             padding: 0.5rem 1rem;
-            margin-bottom: 1rem;
-            font-weight: 500;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: all 0.15s ease-in-out;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
         }
-        .status-online {
-            background-color: var(--success-color);
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 8px -1px rgba(0, 0, 0, 0.15), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+        }
+        .btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background-color: var(--color-secondary);
             color: white;
         }
-        .status-local {
-            background-color: var(--warning-color);
-            color: #1f2937;
+        .btn-primary:disabled {
+            background-color: #A7F3D0; /* Tailwind emerald-200 */
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
-        .status-error {
-            background-color: var(--error-color);
+
+        .btn-secondary {
+            background-color: var(--color-primary);
             color: white;
         }
-        .spinner {
-            border: 4px solid rgba(255, 255, 255, 0.1);
-            border-top: 4px solid white;
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
+        .btn-secondary:disabled {
+            background-color: #93C5FD; /* Tailwind blue-300 */
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        
+        /* Стиль для индикатора прогресса */
+        .progress-bar-container {
+            height: 8px;
+            background-color: #E5E7EB; /* gray-200 */
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background-color: var(--color-secondary);
+            transition: width 0.1s linear;
+        }
+
+        /* Стиль для отключенного состояния (не куплено) */
+        .industry-card.disabled {
+            opacity: 0.6;
+            filter: grayscale(100%);
+        }
+
+        /* Анимация мигания для сбора прибыли */
+        .animate-pulse-collect {
+            animation: pulse-collect 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse-collect {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.8;
+                transform: scale(1.01);
+            }
         }
     </style>
 </head>
 <body>
 
-<div id="app" class="container">
-    <div id="status-bar" class="status-bar status-error">
-        <span id="status-text">Загрузка...</span>
-        <div id="status-icon" class="spinner"></div>
+<div class="game-container">
+    <!-- Заголовок и Баланс -->
+    <header class="bg-white p-4 rounded-xl shadow-lg mb-6 sticky top-0 z-10">
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-2">TashBoss</h1>
+        <div id="balance-display" class="text-2xl font-bold text-gray-700">
+            Баланс: <span class="text-green-600" id="current-balance">0.00</span> BSS
+        </div>
+    </header>
+
+    <!-- Список Отраслей -->
+    <div id="industries-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Карточки отраслей будут сгенерированы здесь JS -->
     </div>
 
-    <!-- Основной интерфейс игры -->
-    <div class="text-center space-y-4">
-        <h1 class="text-3xl font-extrabold text-white mb-6">TashBoss Clicker</h1>
-        
-        <!-- Очки -->
-        <div class="bg-gray-700 p-4 rounded-xl shadow-inner">
-            <p class="text-sm uppercase tracking-wider text-gray-400">Баланс (UZS)</p>
-            <p id="score-display" class="text-6xl font-black text-lime-400">0</p>
-            <p id="tps-display" class="text-md text-gray-300 mt-1">Кликов в секунду: +0</p>
+    <!-- Модальное окно для сообщений (вместо alert) -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-gray-800">Сообщение</h3>
+            <p id="modal-content" class="text-gray-600 mb-4"></p>
+            <button onclick="hideModal()" class="w-full btn btn-primary">Закрыть</button>
         </div>
-
-        <!-- Кликабельная область (логотип) -->
-        <div id="clickable-area" class="clickable-area bg-gray-600 p-6 rounded-full inline-block mt-8 mb-8 shadow-2xl hover:shadow-lg transition-all duration-300">
-            <!-- Иконка Boss (можно заменить на ваше лого) -->
-            <svg class="w-24 h-24 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-1.025-8.745-2.745M12 18h.01M12 12a2.5 2.5 0 110-5 2.5 2.5 0 010 5zm0 0v6m0-6h6m-6 0H6"/>
-            </svg>
-        </div>
-
-        <!-- Кнопки улучшений -->
-        <div id="upgrades-list" class="space-y-3 pt-4">
-            <!-- Улучшения будут добавлены сюда JavaScript -->
-        </div>
-
-        <!-- Диалог сообщения (вместо alert) -->
-        <div id="message-dialog" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
-            <div class="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-xs w-full">
-                <p id="dialog-text" class="text-lg text-white mb-4"></p>
-                <button id="dialog-close-button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">OK</button>
-            </div>
-        </div>
-
     </div>
 </div>
 
 <script type="module">
-    // Firebase Imports
+    // --- FIREBASE ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА ---
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, getDoc, setDoc, onSnapshot, runTransaction, enableIndexedDbPersistence, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc, collection, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    // =========================================================================
-    // 1. GLOBAL VARIABLES AND SETUP
-    // =========================================================================
-
-    // MANDATORY VARIABLES from Canvas Environment
+    // Глобальные переменные из среды Canvas/Render
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
     const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-    // Firebase instances
     let app, db, auth;
     let userId = null;
-    let isConnected = false;
+    let gameStateDocRef = null;
     let isAuthReady = false;
 
-    // Game state
-    let score = 0;
-    let clicksPerSecond = 0;
-    let clickValue = 1;
-    let lastSaveTimestamp = Date.now();
+    // --- МОДЕЛЬ ИГРЫ ---
 
-    // DOM Elements
-    const scoreDisplay = document.getElementById('score-display');
-    const tpsDisplay = document.getElementById('tps-display');
-    const clickableArea = document.getElementById('clickable-area');
-    const upgradesList = document.getElementById('upgrades-list');
-    const statusBar = document.getElementById('status-bar');
-    const statusText = document.getElementById('status-text');
-    const statusIcon = document.getElementById('status-icon');
-    const messageDialog = document.getElementById('message-dialog');
-    const dialogText = document.getElementById('dialog-text');
-    const dialogCloseButton = document.getElementById('dialog-close-button');
-
-    // Upgrade configuration
-    const UPGRADES = [
-        { id: 'click-power', name: 'Сила Клика', basePrice: 10, multiplier: 1.5, type: 'click' },
-        { id: 'auto-click', name: 'АвтоКлик', basePrice: 100, multiplier: 1.8, type: 'auto' },
-        { id: 'speed-boost', name: 'Ускорение TPS', basePrice: 500, multiplier: 2.0, type: 'auto' }
+    // Базовые параметры отраслей
+    const BASE_INDUSTRIES = [
+        { id: 1, name: "Уборка улиц", description: "Базовая отрасль — чистота и порядок в городе", startCost: 100, baseIncome: 1, cycleTime: 60000, icon: "🧹" }, // 60 сек
+        { id: 2, name: "Коммунальные службы", description: "Вода, свет, тепло, благоустройство", startCost: 300, baseIncome: 3, cycleTime: 50000, icon: "💡" }, // 50 сек
+        { id: 3, name: "Транспорт", description: "Автобусы, метро, дороги", startCost: 1000, baseIncome: 8, cycleTime: 45000, icon: "🚌" }, // 45 сек
+        { id: 4, name: "Парки и зоны отдыха", description: "Озеленение, фонтаны, лавочки", startCost: 3000, baseIncome: 20, cycleTime: 40000, icon: "🌳" }, // 40 сек
+        { id: 5, name: "Малый бизнес", description: "Кафе, магазины, рынки", startCost: 8000, baseIncome: 50, cycleTime: 35000, icon: "☕" }, // 35 сек
+        { id: 6, name: "Заводы и фабрики", description: "Производство и промышленность", startCost: 20000, baseIncome: 120, cycleTime: 30000, icon: "🏭" }, // 30 сек
+        { id: 7, name: "Качество воздуха", description: "Установка фильтров, датчиков, озеленение", startCost: 50000, baseIncome: 200, cycleTime: 25000, icon: "🌬️" }, // 25 сек
+        { id: 8, name: "IT-парк", description: "Инновации, цифровые стартапы", startCost: 120000, baseIncome: 500, cycleTime: 20000, icon: "💻" }, // 20 сек
+        { id: 9, name: "Туризм", description: "Гостиницы, достопримечательности, фестивали", startCost: 250000, baseIncome: 1000, cycleTime: 15000, icon: "🗺️" }, // 15 сек
+        { id: 10, name: "Международное сотрудничество", description: "Привлечение инвестиций и развитие связей с другими странами", startCost: 1000000, baseIncome: 5000, cycleTime: 10000, icon: "🌐" }, // 10 сек
     ];
 
-    let userUpgrades = {}; // { 'click-power': { level: 0, price: 10, value: 1 }, ...}
-    
-    // =========================================================================
-    // 2. UTILITY FUNCTIONS
-    // =========================================================================
-
-    // Custom dialog function to replace alert()
-    function showDialog(message) {
-        dialogText.textContent = message;
-        messageDialog.classList.remove('hidden');
-        messageDialog.classList.add('flex');
-    }
-
-    dialogCloseButton.onclick = () => {
-        messageDialog.classList.add('hidden');
-        messageDialog.classList.remove('flex');
+    // Начальное состояние игры
+    let gameState = {
+        balance: 0,
+        lastCollectionTime: Date.now(),
+        industries: BASE_INDUSTRIES.map(base => ({
+            id: base.id,
+            level: 0, // 0 означает, что не куплено
+            isManaged: false,
+            lastCollectionTime: Date.now()
+        }))
     };
-    
-    // Format number for display
-    function formatNumber(num) {
-        if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
-        if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
-        if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
-        return num.toFixed(0);
+
+    // --- ФУНКЦИИ ИГРОВОЙ ЛОГИКИ ---
+
+    /**
+     * Форматирует число в строку BSS с двумя знаками после запятой.
+     * @param {number} amount
+     * @returns {string}
+     */
+    function formatBSS(amount) {
+        return parseFloat(amount).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     }
 
-    // Initialize user upgrades structure
-    UPGRADES.forEach(u => {
-        userUpgrades[u.id] = { level: 0, price: u.basePrice, value: u.type === 'click' ? 1 : 0 };
-    });
-
-    // =========================================================================
-    // 3. FIREBASE / AUTH / DATA HANDLING
-    // =========================================================================
-
-    function getFirestorePath(isPublic = false) {
-        if (!userId) {
-            console.error("User ID is not set. Cannot determine Firestore path.");
-            return null;
-        }
-        if (isPublic) {
-            // Public path for sharing data (not used in this single-player game, but good practice)
-            return `artifacts/${appId}/public/data/clicker_data/${userId}`;
-        } else {
-            // Private path for user data
-            return `artifacts/${appId}/users/${userId}/clicker_data/game_state`;
-        }
+    /**
+     * Рассчитывает стоимость покупки/уровня отрасли.
+     * @param {number} baseCost
+     * @param {number} currentLevel
+     * @returns {number}
+     */
+    function calculateCost(baseCost, currentLevel) {
+        if (currentLevel === 0) return baseCost;
+        // Стоимость растет экспоненциально: BaseCost * (1.15 ^ CurrentLevel)
+        return Math.floor(baseCost * Math.pow(1.15, currentLevel));
     }
 
-    async function initFirebaseAndAuth() {
-        if (!firebaseConfig) {
-            console.error("FATAL: Firebase config is missing. Starting in Local Mode.");
-            setLocalMode(true);
+    /**
+     * Рассчитывает текущий доход отрасли.
+     * @param {number} baseIncome
+     * @param {number} currentLevel
+     * @returns {number}
+     */
+    function calculateIncome(baseIncome, currentLevel) {
+        // Доход растет линейно: BaseIncome * CurrentLevel
+        return baseIncome * currentLevel;
+    }
+
+    /**
+     * Рассчитывает текущее время цикла отрасли.
+     * @param {number} baseCycleTime
+     * @param {number} currentLevel
+     * @returns {number} Время в миллисекундах
+     */
+    function calculateCycleTime(baseCycleTime, currentLevel) {
+        // Время цикла уменьшается, но не ниже 10% от базового
+        const minTime = baseCycleTime * 0.1;
+        const reductionPerLevel = baseCycleTime * 0.02; // Уменьшение на 2% от базового времени за уровень
+        
+        let newTime = baseCycleTime - (reductionPerLevel * (currentLevel - 1));
+        return Math.max(newTime, minTime);
+    }
+
+    /**
+     * Рассчитывает накопленный доход для одной отрасли.
+     * @param {Object} industryState
+     * @param {Object} baseIndustry
+     * @param {number} currentTime
+     * @returns {number} Накопленный доход
+     */
+    function calculateAccumulatedIncome(industryState, baseIndustry, currentTime) {
+        if (industryState.level === 0) return 0;
+
+        const incomePerCycle = calculateIncome(baseIndustry.baseIncome, industryState.level);
+        const cycleTime = calculateCycleTime(baseIndustry.cycleTime, industryState.level);
+        const lastCollection = industryState.lastCollectionTime;
+
+        const timePassed = currentTime - lastCollection;
+        
+        // Сколько полных циклов прошло
+        const cyclesCompleted = Math.floor(timePassed / cycleTime);
+
+        return cyclesCompleted * incomePerCycle;
+    }
+
+
+    /**
+     * Обновляет состояние игры (доход от оффлайн-прогресса).
+     * @param {Object} currentGameState
+     * @param {number} currentTime
+     * @returns {{totalOfflineIncome: number, updatedIndustries: Array}}
+     */
+    function updateGameStateForOfflineProgress(currentGameState, currentTime) {
+        let totalOfflineIncome = 0;
+        const updatedIndustries = currentGameState.industries.map(indState => {
+            const baseInd = BASE_INDUSTRIES.find(b => b.id === indState.id);
+            const incomePerCycle = calculateIncome(baseInd.baseIncome, indState.level);
+            const cycleTime = calculateCycleTime(baseInd.cycleTime, indState.level);
+
+            const timePassed = currentTime - indState.lastCollectionTime;
+            const cyclesCompleted = Math.floor(timePassed / cycleTime);
+
+            if (indState.isManaged && cyclesCompleted > 0) {
+                const income = cyclesCompleted * incomePerCycle;
+                totalOfflineIncome += income;
+                // Обновляем время последней коллекции на момент завершения последнего цикла
+                const newLastCollectionTime = indState.lastCollectionTime + (cyclesCompleted * cycleTime);
+
+                return {
+                    ...indState,
+                    lastCollectionTime: newLastCollectionTime
+                };
+            }
+
+            // Для неавтоматизированных или несобранных оставляем время как есть
+            return indState;
+        });
+
+        return {
+            totalOfflineIncome: totalOfflineIncome,
+            updatedIndustries: updatedIndustries
+        };
+    }
+
+    // --- УПРАВЛЕНИЕ UI И РЕНДЕРИНГ ---
+
+    /**
+     * Отображает модальное сообщение.
+     * @param {string} title
+     * @param {string} content
+     */
+    function showModal(title, content) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-content').textContent = content;
+        document.getElementById('message-modal').classList.remove('hidden');
+        document.getElementById('message-modal').classList.add('flex');
+    }
+
+    /**
+     * Скрывает модальное сообщение.
+     */
+    function hideModal() {
+        document.getElementById('message-modal').classList.add('hidden');
+        document.getElementById('message-modal').classList.remove('flex');
+    }
+
+    /**
+     * Обновляет отображение баланса.
+     */
+    function updateBalanceUI() {
+        document.getElementById('current-balance').textContent = formatBSS(gameState.balance);
+    }
+
+
+    /**
+     * Генерирует HTML для карточки отрасли.
+     * @param {Object} indState - Текущее состояние отрасли
+     * @param {Object} baseInd - Базовые параметры отрасли
+     * @returns {string} HTML-строка
+     */
+    function createIndustryCard(indState, baseInd) {
+        const isBought = indState.level > 0;
+        const nextCost = calculateCost(baseInd.startCost, indState.level);
+        const currentIncome = isBought ? calculateIncome(baseInd.baseIncome, indState.level) : 0;
+        const currentCycle = isBought ? calculateCycleTime(baseInd.cycleTime, indState.level) / 1000 : baseInd.cycleTime / 1000;
+        const nextIncome = isBought ? calculateIncome(baseInd.baseIncome, indState.level + 1) : baseInd.baseIncome;
+        const nextCycle = isBought ? calculateCycleTime(baseInd.cycleTime, indState.level + 1) / 1000 : baseInd.cycleTime / 1000;
+        
+        // Для удобства отображения стоимости Ответственного (всегда 10 циклов)
+        const managerCost = calculateCost(baseInd.startCost, indState.level) * 10;
+        
+        let cycleProgress = 0;
+        let accruedIncome = 0;
+        
+        if (isBought) {
+            const cycleTimeMs = calculateCycleTime(baseInd.cycleTime, indState.level);
+            const timePassed = Date.now() - indState.lastCollectionTime;
+            
+            accruedIncome = calculateAccumulatedIncome(indState, baseInd, Date.now());
+            
+            // Прогресс текущего цикла
+            const timeInCurrentCycle = timePassed % cycleTimeMs;
+            cycleProgress = Math.min(100, (timeInCurrentCycle / cycleTimeMs) * 100);
+        }
+
+        const disabledClass = !isBought ? 'disabled' : '';
+        const collectPulseClass = accruedIncome > 0 && !indState.isManaged ? 'animate-pulse-collect shadow-yellow-500/50' : '';
+
+        return `
+            <div id="industry-${baseInd.id}" class="industry-card ${disabledClass} bg-white p-6 rounded-xl shadow-lg flex flex-col justify-between">
+                <div>
+                    <div class="flex items-center mb-3">
+                        <span class="text-3xl mr-3">${baseInd.icon}</span>
+                        <h2 class="text-xl font-bold text-gray-800">${baseInd.name}</h2>
+                    </div>
+                    
+                    <p class="text-sm text-gray-500 mb-2">${baseInd.description}</p>
+                    <div class="mb-4">
+                        <p class="text-base font-medium text-gray-700">Уровень: ${indState.level}</p>
+                        ${isBought ? `
+                            <p class="text-base font-medium text-green-600">Доход: ${formatBSS(currentIncome)} BSS / ${currentCycle.toFixed(1)} сек</p>
+                        ` : ''}
+                    </div>
+
+                    ${isBought ? `
+                        <div class="mt-2 text-sm">
+                            <p class="font-semibold text-gray-700">Накопленная прибыль: <span class="text-yellow-600">${formatBSS(accruedIncome)} BSS</span></p>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" style="width: ${cycleProgress}%;"></div>
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    <div class="mt-4 pt-4 border-t border-gray-200">
+                        ${!isBought || (indState.level < 100 && isBought) ? `
+                            <p class="text-sm text-gray-600 mb-2">
+                                ${!isBought ? 'Покупка (ур. 1):' : 'Улучшение (ур. ' + (indState.level + 1) + '):'}
+                                <span class="font-bold text-red-500">${formatBSS(nextCost)} BSS</span>
+                            </p>
+                             <p class="text-xs text-gray-400 mb-2">
+                                (Доход: ${formatBSS(nextIncome)} BSS / ${nextCycle.toFixed(1)} сек)
+                            </p>
+                            <button 
+                                onclick="upgradeIndustry(${baseInd.id})" 
+                                class="w-full btn btn-secondary mb-2"
+                                ${gameState.balance < nextCost ? 'disabled' : ''}
+                            >
+                                ${!isBought ? 'Купить' : 'Повысить уровень'}
+                            </button>
+                        ` : `<p class="text-lg font-bold text-yellow-600">Макс. уровень (100)</p>`}
+                        
+                    </div>
+                </div>
+
+                <!-- Блок сбора прибыли и автоматизации -->
+                <div class="mt-4">
+                    ${isBought ? `
+                        <button 
+                            onclick="collectIncome(${baseInd.id})" 
+                            class="w-full btn btn-primary mb-2 ${collectPulseClass}"
+                            ${accruedIncome === 0 || indState.isManaged ? 'disabled' : ''}
+                        >
+                            Собрать (${formatBSS(accruedIncome)} BSS)
+                        </button>
+                    ` : ''}
+                    
+                    ${isBought && !indState.isManaged ? `
+                        <p class="text-xs text-gray-500 mb-2">Ответственный (10 циклов): ${formatBSS(managerCost)} BSS</p>
+                        <button 
+                            onclick="hireManager(${baseInd.id})" 
+                            class="w-full btn bg-indigo-500 hover:bg-indigo-600 text-white"
+                            ${gameState.balance < managerCost ? 'disabled' : ''}
+                        >
+                            Назначить Ответственного
+                        </button>
+                    ` : isBought && indState.isManaged ? `
+                        <p class="text-sm font-bold text-green-500 mt-2 p-2 bg-green-50 rounded-lg">✅ Ответственный (Автосбор)</p>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Обновляет список отраслей.
+     */
+    function renderIndustries() {
+        const listElement = document.getElementById('industries-list');
+        listElement.innerHTML = gameState.industries.map(indState => {
+            const baseInd = BASE_INDUSTRIES.find(b => b.id === indState.id);
+            return createIndustryCard(indState, baseInd);
+        }).join('');
+    }
+
+    // --- ФУНКЦИИ УПРАВЛЕНИЯ ИГРОЙ ---
+
+    /**
+     * Обновляет состояние игры в базе данных.
+     */
+    async function saveGameState() {
+        if (!gameStateDocRef || !isAuthReady) {
+            console.error("Firebase не готов или DocRef не определен.");
             return;
         }
 
         try {
-            // 1. Initialize Firebase
+            // Сохраняем только те данные, которые могут измениться
+            const dataToSave = {
+                balance: gameState.balance,
+                lastCollectionTime: Date.now(),
+                industries: gameState.industries.map(ind => ({
+                    id: ind.id,
+                    level: ind.level,
+                    isManaged: ind.isManaged,
+                    lastCollectionTime: ind.lastCollectionTime
+                }))
+            };
+            await setDoc(gameStateDocRef, dataToSave, { merge: true });
+        } catch (error) {
+            console.error("Ошибка сохранения состояния игры:", error);
+        }
+    }
+
+    /**
+     * Повышает уровень отрасли или покупает ее.
+     * @param {number} industryId
+     */
+    window.upgradeIndustry = async function(industryId) {
+        const indState = gameState.industries.find(i => i.id === industryId);
+        const baseInd = BASE_INDUSTRIES.find(b => b.id === industryId);
+
+        if (!indState || !baseInd) return;
+
+        const nextCost = calculateCost(baseInd.startCost, indState.level);
+
+        if (gameState.balance < nextCost) {
+            showModal("Недостаточно средств", `Для покупки/улучшения "${baseInd.name}" требуется ${formatBSS(nextCost)} BSS.`);
+            return;
+        }
+        if (indState.level >= 100) {
+            showModal("Максимальный уровень", `Отрасль "${baseInd.name}" уже достигла максимального уровня.`);
+            return;
+        }
+        
+        // Списываем средства
+        gameState.balance -= nextCost;
+        
+        // Повышаем уровень
+        indState.level += 1;
+        
+        // Если только что куплено, устанавливаем время последней коллекции на сейчас
+        if (indState.level === 1) {
+            indState.lastCollectionTime = Date.now();
+        }
+
+        updateBalanceUI();
+        renderIndustries();
+        await saveGameState();
+    }
+
+    /**
+     * Сбор накопленной прибыли с отрасли.
+     * @param {number} industryId
+     */
+    window.collectIncome = async function(industryId) {
+        const indState = gameState.industries.find(i => i.id === industryId);
+        const baseInd = BASE_INDUSTRIES.find(b => b.id === industryId);
+
+        if (!indState || !baseInd || indState.level === 0) return;
+        if (indState.isManaged) return; // Автоматизированные отрасли не собираются вручную
+
+        const accruedIncome = calculateAccumulatedIncome(indState, baseInd, Date.now());
+
+        if (accruedIncome === 0) {
+            showModal("Нет прибыли", `У отрасли "${baseInd.name}" нет накопленной прибыли для сбора.`);
+            return;
+        }
+        
+        // Время цикла
+        const cycleTimeMs = calculateCycleTime(baseInd.cycleTime, indState.level);
+        
+        // Время, которое нужно добавить к lastCollectionTime
+        const timePassed = Date.now() - indState.lastCollectionTime;
+        const cyclesCompleted = Math.floor(timePassed / cycleTimeMs);
+        const timeToAdvance = cyclesCompleted * cycleTimeMs;
+
+
+        // Добавляем прибыль
+        gameState.balance += accruedIncome;
+        
+        // Сбрасываем таймер: время последней коллекции сдвигается вперед
+        indState.lastCollectionTime += timeToAdvance;
+
+        showModal("Сбор прибыли", `Вы собрали ${formatBSS(accruedIncome)} BSS от "${baseInd.name}"!`);
+        updateBalanceUI();
+        renderIndustries();
+        await saveGameState();
+    }
+    
+    /**
+     * Нанимает Ответственного (менеджера) для автоматического сбора прибыли.
+     * @param {number} industryId
+     */
+    window.hireManager = async function(industryId) {
+        const indState = gameState.industries.find(i => i.id === industryId);
+        const baseInd = BASE_INDUSTRIES.find(b => b.id === industryId);
+
+        if (!indState || !baseInd || indState.level === 0) return;
+        if (indState.isManaged) return;
+
+        // Стоимость - 10 циклов
+        const managerCost = calculateCost(baseInd.startCost, indState.level) * 10;
+
+        if (gameState.balance < managerCost) {
+            showModal("Недостаточно средств", `Назначение Ответственного требует ${formatBSS(managerCost)} BSS.`);
+            return;
+        }
+
+        gameState.balance -= managerCost;
+        indState.isManaged = true;
+
+        showModal("Ответственный назначен!", `Отрасль "${baseInd.name}" теперь будет собирать прибыль автоматически.`);
+        updateBalanceUI();
+        renderIndustries();
+        await saveGameState();
+    }
+
+
+    // --- FIREBASE И АВТОРИЗАЦИЯ ---
+
+    /**
+     * Обрабатывает загрузку начального состояния игры из Firestore.
+     * @param {Object} data - Данные из Firestore
+     */
+    function handleInitialLoad(data) {
+        let needsSave = false;
+        
+        if (data) {
+            // Загружаем данные из базы
+            gameState.balance = data.balance || 0;
+            gameState.industries = data.industries || gameState.industries;
+            
+            // Проверяем оффлайн-прогресс для автоматизированных отраслей
+            const currentTime = Date.now();
+            const { totalOfflineIncome, updatedIndustries } = updateGameStateForOfflineProgress(gameState, currentTime);
+            
+            if (totalOfflineIncome > 0) {
+                gameState.balance += totalOfflineIncome;
+                gameState.industries = updatedIndustries;
+                showModal("Оффлайн-прогресс", `Пока вас не было, автоматизированные отрасли заработали ${formatBSS(totalOfflineIncome)} BSS!`);
+                needsSave = true;
+            }
+        } else {
+            // Если данных нет, сохраняем начальное состояние
+            needsSave = true;
+        }
+        
+        // Проверяем, что все 10 отраслей существуют в состоянии игры (для совместимости)
+        if (gameState.industries.length < BASE_INDUSTRIES.length) {
+            BASE_INDUSTRIES.forEach(baseInd => {
+                if (!gameState.industries.find(i => i.id === baseInd.id)) {
+                    gameState.industries.push({
+                        id: baseInd.id,
+                        level: 0,
+                        isManaged: false,
+                        lastCollectionTime: Date.now()
+                    });
+                    needsSave = true;
+                }
+            });
+        }
+
+
+        updateBalanceUI();
+        renderIndustries();
+        if (needsSave) {
+            saveGameState();
+        }
+        
+        // Запуск основного игрового цикла
+        setInterval(gameLoop, 100); 
+    }
+
+    /**
+     * Инициализирует Firebase и подписывается на изменения состояния игры.
+     */
+    async function initializeFirebase() {
+        try {
             app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
-            setLogLevel('debug'); // Enable detailed logging
-
-            // Optional: Enable offline support
-            await enableIndexedDbPersistence(db)
-                .catch((err) => {
-                    if (err.code == 'failed-precondition') {
-                        console.warn("Multiple tabs cannot use IndexedDB persistence simultaneously.");
-                    } else if (err.code == 'unimplemented') {
-                        console.warn("The current browser does not support IndexedDB persistence.");
-                    }
-                });
-
-            // 2. Authentication
-            if (initialAuthToken) {
-                // Use custom token provided by the Canvas environment
-                await signInWithCustomToken(auth, initialAuthToken);
-                console.log("Authentication successful using custom token.");
-            } else {
-                // Fallback to anonymous sign-in if token is missing
-                await signInAnonymously(auth);
-                console.warn("Custom token not available. Signed in anonymously.");
-            }
             
-            // 3. Set Auth State Listener
-            onAuthStateChanged(auth, (user) => {
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+                // Если токен не предоставлен, входим анонимно
+                await signInAnonymously(auth);
+            }
+
+            onAuthStateChanged(auth, async (user) => {
                 if (user) {
                     userId = user.uid;
+                    // Путь: /artifacts/{appId}/users/{userId}/gameState/main
+                    gameStateDocRef = doc(db, 'artifacts', appId, 'users', userId, 'gameState', 'main');
                     isAuthReady = true;
-                    console.log("Auth State Changed: User is authenticated. UID:", userId);
-                    startDataListener(); // Start listening for data once authenticated
+
+                    // Подписываемся на изменения в реальном времени
+                    onSnapshot(gameStateDocRef, (doc) => {
+                        const data = doc.data();
+                        
+                        // Если это первый запуск или данные изменились, загружаем их
+                        if (data && (!gameState.lastCollectionTime || data.lastCollectionTime > gameState.lastCollectionTime)) {
+                            // Логика загрузки, предотвращающая петлю
+                            gameState.balance = data.balance || 0;
+                            gameState.industries = data.industries || gameState.industries;
+                            // lastCollectionTime используется только для оффлайн-прогресса и не сохраняется в gameState
+                            
+                            updateBalanceUI();
+                            renderIndustries();
+                        } else if (!data) {
+                            // Если документ не существует, инициализируем игру
+                             handleInitialLoad(null);
+                        }
+                    }, (error) => {
+                        console.error("Ошибка при получении данных Firestore:", error);
+                        // Попробуем загрузить данные один раз
+                         handleInitialLoad(null);
+                    });
+
+                    // Загрузка начального состояния один раз для обработки оффлайн-прогресса
+                    const docSnap = await getDoc(gameStateDocRef);
+                    handleInitialLoad(docSnap.data());
+
                 } else {
-                    // User signed out or failed to sign in
-                    userId = null;
-                    isAuthReady = true;
-                    isConnected = false;
-                    console.error("Auth State Changed: User is NOT authenticated.");
-                    setLocalMode(true);
+                    console.log("Пользователь не аутентифицирован. Используется анонимный вход.");
+                    // Продолжаем игру без сохранения, если не удалось аутентифицироваться
+                    isAuthReady = false;
+                    handleInitialLoad(null); // Запускаем игру без сохранения
                 }
             });
 
-        } catch (e) {
-            // Catch connection errors, config errors, etc.
-            console.error("FATAL: Firebase initialization failed. Error:", e.message);
-            // Use a fallback random UUID for userId for local storage if all else fails
-            userId = userId || crypto.randomUUID(); 
-            setLocalMode(true);
+        } catch (error) {
+            console.error("FATAL: Ошибка инициализации Firebase.", error);
+            showModal("Ошибка", "Не удалось подключиться к базе данных. Проверьте настройки Firebase.");
         }
     }
+    
+    // --- ОСНОВНОЙ ИГРОВОЙ ЦИКЛ ---
 
-    function setLocalMode(isLocal) {
-        isConnected = !isLocal;
-        if (isLocal) {
-            statusBar.className = 'status-bar status-local';
-            statusText.textContent = `Локальный режим | ID: ${userId.substring(0, 8)}...`;
-            statusIcon.className = 'w-3 h-3 bg-yellow-900 rounded-full'; // Yellow dot
-            console.warn("Running in LOCAL MODE. Progress will NOT be saved to Firestore.");
-            // In local mode, we just load defaults and start the game loop
-            loadStateLocally(); 
-            startGameLoop();
-        } else {
-            // This is handled by startDataListener when connection is successful
-        }
-    }
+    /**
+     * Основной цикл игры, который обновляет UI и обрабатывает автосбор.
+     */
+    async function gameLoop() {
+        const currentTime = Date.now();
+        let needsSave = false;
 
-    function loadStateLocally() {
-        // Load state from session storage or use defaults
-        const savedScore = sessionStorage.getItem('score');
-        const savedUpgrades = sessionStorage.getItem('upgrades');
+        // 1. Автоматический сбор (только для isManaged)
+        gameState.industries.forEach(indState => {
+            if (indState.level > 0 && indState.isManaged) {
+                const baseInd = BASE_INDUSTRIES.find(b => b.id === indState.id);
+                const incomePerCycle = calculateIncome(baseInd.baseIncome, indState.level);
+                const cycleTime = calculateCycleTime(baseInd.cycleTime, indState.level);
 
-        if (savedScore) score = parseInt(savedScore);
-        if (savedUpgrades) userUpgrades = JSON.parse(savedUpgrades);
-
-        updateGameMetrics();
-        renderUpgrades();
-    }
-
-    function saveStateLocally() {
-        sessionStorage.setItem('score', score.toFixed(0));
-        sessionStorage.setItem('upgrades', JSON.stringify(userUpgrades));
-    }
-
-    // Called once authentication is complete
-    function startDataListener() {
-        if (!db || !userId) return;
-
-        const path = getFirestorePath(false);
-        if (!path) return;
-
-        console.log("Starting Firestore listener on path:", path);
-        
-        // Use onSnapshot for real-time updates
-        const docRef = doc(db, path);
-
-        onSnapshot(docRef, 
-            (docSnapshot) => {
-                if (!isAuthReady) return; // Prevent firing before initial auth is complete
-
-                isConnected = true;
-                statusBar.className = 'status-bar status-online';
-                statusText.textContent = `Подключено | ID: ${userId.substring(0, 8)}...`;
-                statusIcon.className = 'w-3 h-3 bg-white rounded-full'; // White dot
-
-                if (docSnapshot.exists()) {
-                    console.log("Data received from Firestore.");
-                    loadGameState(docSnapshot.data());
-                } else {
-                    console.log("No existing data found. Creating new state.");
-                    saveGameState(); // Create initial document
-                }
+                const timePassed = currentTime - indState.lastCollectionTime;
                 
-                startGameLoop(); // Ensure game loop is running after data load
-            }, 
-            (error) => {
-                // Handle errors like permission denied, connection issues, etc.
-                console.error("Firestore snapshot error:", error.message);
-                isConnected = false;
-                // Fallback to local mode on real-time error
-                setLocalMode(true);
-            }
-        );
-    }
+                // Сколько полных циклов прошло
+                const cyclesCompleted = Math.floor(timePassed / cycleTime);
 
-    function loadGameState(data) {
-        // Load main stats
-        score = data.score || 0;
-        clickValue = data.clickValue || 1;
-
-        // Load upgrades and prices
-        userUpgrades = data.upgrades || JSON.parse(JSON.stringify(userUpgrades));
-        
-        // Calculate offline progress (simple calculation)
-        const now = Date.now();
-        const lastLogin = data.lastLogin || now;
-        const timeElapsedSeconds = Math.floor((now - lastLogin) / 1000);
-
-        if (timeElapsedSeconds > 60 && clicksPerSecond > 0) { // Only calculate if away for over a minute
-            const offlineGains = timeElapsedSeconds * clicksPerSecond;
-            score += offlineGains;
-            showDialog(`Вы заработали ${formatNumber(offlineGains)} UZS, пока вас не было!`);
-            console.log(`Offline progress calculated: +${offlineGains} over ${timeElapsedSeconds}s`);
-        }
-
-        lastSaveTimestamp = now;
-
-        updateGameMetrics();
-        renderUpgrades();
-    }
-    
-    // Save state using a transaction to avoid race conditions
-    async function saveGameState() {
-        if (!db || !userId || !isConnected) {
-            saveStateLocally();
-            return;
-        }
-        
-        const docRef = doc(db, getFirestorePath(false));
-
-        try {
-            await runTransaction(db, async (transaction) => {
-                const docSnapshot = await transaction.get(docRef);
-                
-                const dataToSave = {
-                    score: Math.round(score),
-                    clickValue: clickValue,
-                    upgrades: userUpgrades,
-                    clicksPerSecond: clicksPerSecond,
-                    lastLogin: Date.now(),
-                    userId: userId,
-                };
-
-                if (docSnapshot.exists()) {
-                    transaction.update(docRef, dataToSave);
-                } else {
-                    transaction.set(docRef, dataToSave);
+                if (cyclesCompleted > 0) {
+                    const income = cyclesCompleted * incomePerCycle;
+                    gameState.balance += income;
+                    
+                    // Обновляем время последней коллекции на момент завершения последнего цикла
+                    indState.lastCollectionTime += cyclesCompleted * cycleTime;
+                    needsSave = true;
                 }
-            });
-            lastSaveTimestamp = Date.now();
-        } catch (e) {
-            console.error("Transaction failed: ", e);
-            // If save fails, we don't switch to local mode, 
-            // but the game continues trying to save in the background.
-        }
-    }
-
-    // =========================================================================
-    // 4. GAME LOGIC
-    // =========================================================================
-
-    function updateGameMetrics() {
-        // 1. Reset metrics
-        clickValue = 1;
-        clicksPerSecond = 0;
-
-        // 2. Calculate new metrics based on upgrades
-        UPGRADES.forEach(u => {
-            const up = userUpgrades[u.id];
-            
-            if (u.id === 'click-power') {
-                // Initial click power is 1, so add the value * level
-                clickValue = 1 + up.level * up.value;
-            } else if (u.id === 'auto-click') {
-                // Auto click is direct TPS increase
-                clicksPerSecond += up.level * up.value;
-            } else if (u.id === 'speed-boost') {
-                // Speed boost scales the overall TPS (simplified to direct addition here)
-                clicksPerSecond += up.level * up.value * 5; // Assuming speed boost is more powerful
             }
         });
-
-        scoreDisplay.textContent = formatNumber(score);
-        tpsDisplay.textContent = `Кликов в секунду: +${formatNumber(clicksPerSecond)}`;
-        renderUpgrades(); // Re-render to show updated prices/states
-    }
-
-    function calculateNextPrice(upgradeId, currentLevel) {
-        const config = UPGRADES.find(u => u.id === upgradeId);
-        if (!config) return Infinity;
         
-        // Exponential price increase
-        return config.basePrice * Math.pow(config.multiplier, currentLevel);
-    }
-
-    function handleClick(event) {
-        score += clickValue;
-        scoreDisplay.textContent = formatNumber(score);
-        
-        // Visual click effect
-        const rect = clickableArea.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-
-        // Pulse effect on the main element
-        clickableArea.classList.remove('pulse-effect');
-        void clickableArea.offsetWidth; // Trigger reflow
-        clickableArea.classList.add('pulse-effect');
-
-        // Floating number animation
-        const clickText = document.createElement('div');
-        clickText.textContent = `+${clickValue}`;
-        clickText.className = 'click-animation';
-        clickText.style.left = `${x}px`;
-        clickText.style.top = `${y}px`;
-        clickableArea.appendChild(clickText);
-
-        setTimeout(() => {
-            clickableArea.removeChild(clickText);
-        }, 800);
-    }
-    
-    function buyUpgrade(upgradeId) {
-        const upgrade = userUpgrades[upgradeId];
-        const config = UPGRADES.find(u => u.id === upgradeId);
-        
-        if (score >= upgrade.price) {
-            score -= upgrade.price;
-            upgrade.level += 1;
-            
-            // Recalculate the next price
-            upgrade.price = calculateNextPrice(upgradeId, upgrade.level);
-            
-            // Recalculate the value (simplified)
-            if (config.type === 'click') {
-                upgrade.value = 1; // Simplistic: base value remains 1 per level
-            } else if (config.type === 'auto') {
-                upgrade.value = 1; // Simplistic: base TPS remains 1 per level
-            }
-
-            updateGameMetrics();
-            saveGameState();
-        } else {
-            showDialog(`Недостаточно средств! Нужно ${formatNumber(upgrade.price)} UZS.`);
+        if (needsSave) {
+            updateBalanceUI();
+            await saveGameState();
         }
+
+        // 2. Обновление UI прогресса (для всех отраслей)
+        renderIndustries(); 
     }
 
-    // =========================================================================
-    // 5. RENDERING
-    // =========================================================================
 
-    function renderUpgrades() {
-        upgradesList.innerHTML = '';
-        UPGRADES.forEach(config => {
-            const upgrade = userUpgrades[config.id];
-            
-            // Determine the actual bonus value
-            let bonusText = '';
-            if (config.type === 'click') {
-                bonusText = `+${formatNumber(upgrade.value)} UZS за клик`;
-            } else if (config.type === 'auto') {
-                bonusText = `+${formatNumber(upgrade.value)} TPS`;
-            }
-
-            const canAfford = score >= upgrade.price;
-            const buttonClasses = canAfford 
-                ? 'bg-indigo-600 hover:bg-indigo-700' 
-                : 'bg-gray-500 cursor-not-allowed opacity-50';
-
-            const upgradeHtml = `
-                <div class="flex items-center justify-between bg-gray-700 p-4 rounded-xl shadow-md">
-                    <div>
-                        <p class="text-lg font-semibold text-white">${config.name} (Ур. ${upgrade.level})</p>
-                        <p class="text-sm text-gray-400">${bonusText}</p>
-                    </div>
-                    <button id="buy-${config.id}" class="buy-button ${buttonClasses} text-white font-bold py-2 px-4 rounded-lg transition duration-200"
-                        data-id="${config.id}">
-                        Купить: ${formatNumber(upgrade.price)} UZS
-                    </button>
-                </div>
-            `;
-            upgradesList.insertAdjacentHTML('beforeend', upgradeHtml);
-        });
-
-        // Attach event listeners to newly rendered buttons
-        document.querySelectorAll('.buy-button').forEach(button => {
-            const upgradeId = button.getAttribute('data-id');
-            button.onclick = () => buyUpgrade(upgradeId);
-        });
-    }
-
-    // =========================================================================
-    // 6. MAIN LOOP AND INITIALIZATION
-    // =========================================================================
-
-    let gameLoopInterval = null;
-    
-    function startGameLoop() {
-        if (gameLoopInterval) return; // Prevent multiple intervals
-
-        gameLoopInterval = setInterval(() => {
-            // Apply Auto-Click
-            score += clicksPerSecond;
-            scoreDisplay.textContent = formatNumber(score);
-            
-            // Auto Save to Firestore (every 5 seconds)
-            if (isConnected && Date.now() - lastSaveTimestamp > 5000) {
-                saveGameState();
-            } else if (!isConnected) {
-                // Save locally if in local mode
-                saveStateLocally();
-            }
-
-            // Update UI elements that depend on score (e.g., button colors)
-            renderUpgrades();
-
-        }, 1000); // Run every second
-    }
-
-    // Attach click listener
-    clickableArea.addEventListener('click', handleClick);
-
-    // Start initialization when window loads
-    window.onload = function() {
-        // Initial setup of the game state before any loading happens
-        updateGameMetrics(); 
-        
-        // Start Firebase/Auth setup
-        initFirebaseAndAuth(); 
-        
-        // Fallback for extreme cases where initFirebaseAndAuth fails but we need a game loop
-        if (!isConnected) {
-            startGameLoop();
-        }
-    };
+    // Начинаем игру, как только DOM загрузится
+    window.onload = initializeFirebase;
 </script>
-
 </body>
 </html>
