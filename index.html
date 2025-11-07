@@ -3,735 +3,444 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss: Симулятор Управления Городом</title>
+    <title>TashBoss: Городская Империя</title>
+    <!-- Подключаем Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Общие стили */
-        :root {
-            --color-primary: #1E40AF; /* Tailwind blue-700 */
-            --color-secondary: #059669; /* Tailwind emerald-600 */
-            --color-bg: #F3F4F6; /* Tailwind gray-100 */
-            --color-card: #FFFFFF;
-        }
-
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
         body {
-            background-color: var(--color-bg);
             font-family: 'Inter', sans-serif;
-            margin: 0;
-            padding: 0;
+            background-color: #1e293b; /* Более мягкий темный фон */
+            color: #f8fafc;
+            min-height: 100vh;
         }
-
-        /* Адаптивный контейнер для игры */
-        .game-container {
-            max-width: 1200px;
-            margin: 0 auto;
+        .app-container {
+            max-width: 600px;
+            margin: auto;
             padding: 1rem;
         }
-
-        /* Стиль кнопки */
-        .btn {
-            padding: 0.5rem 1rem;
-            border-radius: 0.5rem;
-            font-weight: 600;
-            transition: all 0.15s ease-in-out;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #a5f3fc;
+            border-bottom: 2px solid #06b6d4;
+            padding-bottom: 0.5rem;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
         }
-        .btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 8px -1px rgba(0, 0, 0, 0.15), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+        .card {
+            background-color: #334155;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            padding: 1rem;
         }
-        .btn:active {
-            transform: translateY(1px);
-            box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+        .profit-button {
+            transition: background-color 0.2s, transform 0.1s;
         }
-
-        .btn-primary {
-            background-color: var(--color-secondary);
-            color: white;
-        }
-        .btn-primary:disabled {
-            background-color: #A7F3D0; /* Tailwind emerald-200 */
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .btn-secondary {
-            background-color: var(--color-primary);
-            color: white;
-        }
-        .btn-secondary:disabled {
-            background-color: #93C5FD; /* Tailwind blue-300 */
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-        
-        /* Стиль для индикатора прогресса */
-        .progress-bar-container {
-            height: 8px;
-            background-color: #E5E7EB; /* gray-200 */
-            border-radius: 4px;
-            overflow: hidden;
-            margin-top: 0.5rem;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background-color: var(--color-secondary);
-            transition: width 0.1s linear;
-        }
-
-        /* Стиль для отключенного состояния (не куплено) */
-        .industry-card.disabled {
-            opacity: 0.6;
-            filter: grayscale(100%);
-        }
-
-        /* Анимация мигания для сбора прибыли */
-        .animate-pulse-collect {
-            animation: pulse-collect 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-
-        @keyframes pulse-collect {
-            0%, 100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-            50% {
-                opacity: 0.8;
-                transform: scale(1.01);
-            }
+        .profit-button:active {
+            transform: scale(0.98);
         }
     </style>
 </head>
 <body>
+    <div class="app-container">
+        <!-- Заголовок -->
+        <h1 class="text-3xl font-extrabold text-center mb-6 text-teal-400">
+            TashBoss 🏙️
+        </h1>
 
-<div class="game-container">
-    <!-- Заголовок и Баланс -->
-    <header class="bg-white p-4 rounded-xl shadow-lg mb-6 sticky top-0 z-10">
-        <h1 class="text-3xl font-extrabold text-gray-900 mb-2">TashBoss</h1>
-        <div id="balance-display" class="text-2xl font-bold text-gray-700">
-            Баланс: <span class="text-green-600" id="current-balance">0.00</span> BSS
-        </div>
-    </header>
-
-    <!-- Список Отраслей -->
-    <div id="industries-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <!-- Карточки отраслей будут сгенерированы здесь JS -->
-    </div>
-
-    <!-- Модальное окно для сообщений (вместо alert) -->
-    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
-        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
-            <h3 id="modal-title" class="text-xl font-bold mb-3 text-gray-800">Сообщение</h3>
-            <p id="modal-content" class="text-gray-600 mb-4"></p>
-            <button onclick="hideModal()" class="w-full btn btn-primary">Закрыть</button>
-        </div>
-    </div>
-</div>
-
-<script type="module">
-    // --- FIREBASE ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА ---
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc, collection, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    // Глобальные переменные из среды Canvas/Render
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-    let app, db, auth;
-    let userId = null;
-    let gameStateDocRef = null;
-    let isAuthReady = false;
-
-    // --- МОДЕЛЬ ИГРЫ ---
-
-    // Базовые параметры отраслей
-    const BASE_INDUSTRIES = [
-        { id: 1, name: "Уборка улиц", description: "Базовая отрасль — чистота и порядок в городе", startCost: 100, baseIncome: 1, cycleTime: 60000, icon: "🧹" }, // 60 сек
-        { id: 2, name: "Коммунальные службы", description: "Вода, свет, тепло, благоустройство", startCost: 300, baseIncome: 3, cycleTime: 50000, icon: "💡" }, // 50 сек
-        { id: 3, name: "Транспорт", description: "Автобусы, метро, дороги", startCost: 1000, baseIncome: 8, cycleTime: 45000, icon: "🚌" }, // 45 сек
-        { id: 4, name: "Парки и зоны отдыха", description: "Озеленение, фонтаны, лавочки", startCost: 3000, baseIncome: 20, cycleTime: 40000, icon: "🌳" }, // 40 сек
-        { id: 5, name: "Малый бизнес", description: "Кафе, магазины, рынки", startCost: 8000, baseIncome: 50, cycleTime: 35000, icon: "☕" }, // 35 сек
-        { id: 6, name: "Заводы и фабрики", description: "Производство и промышленность", startCost: 20000, baseIncome: 120, cycleTime: 30000, icon: "🏭" }, // 30 сек
-        { id: 7, name: "Качество воздуха", description: "Установка фильтров, датчиков, озеленение", startCost: 50000, baseIncome: 200, cycleTime: 25000, icon: "🌬️" }, // 25 сек
-        { id: 8, name: "IT-парк", description: "Инновации, цифровые стартапы", startCost: 120000, baseIncome: 500, cycleTime: 20000, icon: "💻" }, // 20 сек
-        { id: 9, name: "Туризм", description: "Гостиницы, достопримечательности, фестивали", startCost: 250000, baseIncome: 1000, cycleTime: 15000, icon: "🗺️" }, // 15 сек
-        { id: 10, name: "Международное сотрудничество", description: "Привлечение инвестиций и развитие связей с другими странами", startCost: 1000000, baseIncome: 5000, cycleTime: 10000, icon: "🌐" }, // 10 сек
-    ];
-
-    // Начальное состояние игры
-    let gameState = {
-        balance: 0,
-        lastCollectionTime: Date.now(),
-        industries: BASE_INDUSTRIES.map(base => ({
-            id: base.id,
-            level: 0, // 0 означает, что не куплено
-            isManaged: false,
-            lastCollectionTime: Date.now()
-        }))
-    };
-
-    // --- ФУНКЦИИ ИГРОВОЙ ЛОГИКИ ---
-
-    /**
-     * Форматирует число в строку BSS с двумя знаками после запятой.
-     * @param {number} amount
-     * @returns {string}
-     */
-    function formatBSS(amount) {
-        return parseFloat(amount).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-    }
-
-    /**
-     * Рассчитывает стоимость покупки/уровня отрасли.
-     * @param {number} baseCost
-     * @param {number} currentLevel
-     * @returns {number}
-     */
-    function calculateCost(baseCost, currentLevel) {
-        if (currentLevel === 0) return baseCost;
-        // Стоимость растет экспоненциально: BaseCost * (1.15 ^ CurrentLevel)
-        return Math.floor(baseCost * Math.pow(1.15, currentLevel));
-    }
-
-    /**
-     * Рассчитывает текущий доход отрасли.
-     * @param {number} baseIncome
-     * @param {number} currentLevel
-     * @returns {number}
-     */
-    function calculateIncome(baseIncome, currentLevel) {
-        // Доход растет линейно: BaseIncome * CurrentLevel
-        return baseIncome * currentLevel;
-    }
-
-    /**
-     * Рассчитывает текущее время цикла отрасли.
-     * @param {number} baseCycleTime
-     * @param {number} currentLevel
-     * @returns {number} Время в миллисекундах
-     */
-    function calculateCycleTime(baseCycleTime, currentLevel) {
-        // Время цикла уменьшается, но не ниже 10% от базового
-        const minTime = baseCycleTime * 0.1;
-        const reductionPerLevel = baseCycleTime * 0.02; // Уменьшение на 2% от базового времени за уровень
-        
-        let newTime = baseCycleTime - (reductionPerLevel * (currentLevel - 1));
-        return Math.max(newTime, minTime);
-    }
-
-    /**
-     * Рассчитывает накопленный доход для одной отрасли.
-     * @param {Object} industryState
-     * @param {Object} baseIndustry
-     * @param {number} currentTime
-     * @returns {number} Накопленный доход
-     */
-    function calculateAccumulatedIncome(industryState, baseIndustry, currentTime) {
-        if (industryState.level === 0) return 0;
-
-        const incomePerCycle = calculateIncome(baseIndustry.baseIncome, industryState.level);
-        const cycleTime = calculateCycleTime(baseIndustry.cycleTime, industryState.level);
-        const lastCollection = industryState.lastCollectionTime;
-
-        const timePassed = currentTime - lastCollection;
-        
-        // Сколько полных циклов прошло
-        const cyclesCompleted = Math.floor(timePassed / cycleTime);
-
-        return cyclesCompleted * incomePerCycle;
-    }
-
-
-    /**
-     * Обновляет состояние игры (доход от оффлайн-прогресса).
-     * @param {Object} currentGameState
-     * @param {number} currentTime
-     * @returns {{totalOfflineIncome: number, updatedIndustries: Array}}
-     */
-    function updateGameStateForOfflineProgress(currentGameState, currentTime) {
-        let totalOfflineIncome = 0;
-        const updatedIndustries = currentGameState.industries.map(indState => {
-            const baseInd = BASE_INDUSTRIES.find(b => b.id === indState.id);
-            const incomePerCycle = calculateIncome(baseInd.baseIncome, indState.level);
-            const cycleTime = calculateCycleTime(baseInd.cycleTime, indState.level);
-
-            const timePassed = currentTime - indState.lastCollectionTime;
-            const cyclesCompleted = Math.floor(timePassed / cycleTime);
-
-            if (indState.isManaged && cyclesCompleted > 0) {
-                const income = cyclesCompleted * incomePerCycle;
-                totalOfflineIncome += income;
-                // Обновляем время последней коллекции на момент завершения последнего цикла
-                const newLastCollectionTime = indState.lastCollectionTime + (cyclesCompleted * cycleTime);
-
-                return {
-                    ...indState,
-                    lastCollectionTime: newLastCollectionTime
-                };
-            }
-
-            // Для неавтоматизированных или несобранных оставляем время как есть
-            return indState;
-        });
-
-        return {
-            totalOfflineIncome: totalOfflineIncome,
-            updatedIndustries: updatedIndustries
-        };
-    }
-
-    // --- УПРАВЛЕНИЕ UI И РЕНДЕРИНГ ---
-
-    /**
-     * Отображает модальное сообщение.
-     * @param {string} title
-     * @param {string} content
-     */
-    function showModal(title, content) {
-        document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-content').textContent = content;
-        document.getElementById('message-modal').classList.remove('hidden');
-        document.getElementById('message-modal').classList.add('flex');
-    }
-
-    /**
-     * Скрывает модальное сообщение.
-     */
-    function hideModal() {
-        document.getElementById('message-modal').classList.add('hidden');
-        document.getElementById('message-modal').classList.remove('flex');
-    }
-
-    /**
-     * Обновляет отображение баланса.
-     */
-    function updateBalanceUI() {
-        document.getElementById('current-balance').textContent = formatBSS(gameState.balance);
-    }
-
-
-    /**
-     * Генерирует HTML для карточки отрасли.
-     * @param {Object} indState - Текущее состояние отрасли
-     * @param {Object} baseInd - Базовые параметры отрасли
-     * @returns {string} HTML-строка
-     */
-    function createIndustryCard(indState, baseInd) {
-        const isBought = indState.level > 0;
-        const nextCost = calculateCost(baseInd.startCost, indState.level);
-        const currentIncome = isBought ? calculateIncome(baseInd.baseIncome, indState.level) : 0;
-        const currentCycle = isBought ? calculateCycleTime(baseInd.cycleTime, indState.level) / 1000 : baseInd.cycleTime / 1000;
-        const nextIncome = isBought ? calculateIncome(baseInd.baseIncome, indState.level + 1) : baseInd.baseIncome;
-        const nextCycle = isBought ? calculateCycleTime(baseInd.cycleTime, indState.level + 1) / 1000 : baseInd.cycleTime / 1000;
-        
-        // Для удобства отображения стоимости Ответственного (всегда 10 циклов)
-        const managerCost = calculateCost(baseInd.startCost, indState.level) * 10;
-        
-        let cycleProgress = 0;
-        let accruedIncome = 0;
-        
-        if (isBought) {
-            const cycleTimeMs = calculateCycleTime(baseInd.cycleTime, indState.level);
-            const timePassed = Date.now() - indState.lastCollectionTime;
+        <!-- Блок счета и прибыли -->
+        <div class="card mb-6">
+            <p class="text-lg text-gray-400">💰 BossCoin (BSS):</p>
+            <p id="score-display" class="text-5xl font-black text-white mt-1 mb-4">0</p>
             
-            accruedIncome = calculateAccumulatedIncome(indState, baseInd, Date.now());
-            
-            // Прогресс текущего цикла
-            const timeInCurrentCycle = timePassed % cycleTimeMs;
-            cycleProgress = Math.min(100, (timeInCurrentCycle / cycleTimeMs) * 100);
-        }
-
-        const disabledClass = !isBought ? 'disabled' : '';
-        const collectPulseClass = accruedIncome > 0 && !indState.isManaged ? 'animate-pulse-collect shadow-yellow-500/50' : '';
-
-        return `
-            <div id="industry-${baseInd.id}" class="industry-card ${disabledClass} bg-white p-6 rounded-xl shadow-lg flex flex-col justify-between">
+            <div id="profit-section" class="flex items-center justify-between mt-4">
                 <div>
-                    <div class="flex items-center mb-3">
-                        <span class="text-3xl mr-3">${baseInd.icon}</span>
-                        <h2 class="text-xl font-bold text-gray-800">${baseInd.name}</h2>
-                    </div>
-                    
-                    <p class="text-sm text-gray-500 mb-2">${baseInd.description}</p>
-                    <div class="mb-4">
-                        <p class="text-base font-medium text-gray-700">Уровень: ${indState.level}</p>
-                        ${isBought ? `
-                            <p class="text-base font-medium text-green-600">Доход: ${formatBSS(currentIncome)} BSS / ${currentCycle.toFixed(1)} сек</p>
-                        ` : ''}
-                    </div>
-
-                    ${isBought ? `
-                        <div class="mt-2 text-sm">
-                            <p class="font-semibold text-gray-700">Накопленная прибыль: <span class="text-yellow-600">${formatBSS(accruedIncome)} BSS</span></p>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar" style="width: ${cycleProgress}%;"></div>
-                            </div>
-                        </div>
-                    ` : ''}
-
-                    <div class="mt-4 pt-4 border-t border-gray-200">
-                        ${!isBought || (indState.level < 100 && isBought) ? `
-                            <p class="text-sm text-gray-600 mb-2">
-                                ${!isBought ? 'Покупка (ур. 1):' : 'Улучшение (ур. ' + (indState.level + 1) + '):'}
-                                <span class="font-bold text-red-500">${formatBSS(nextCost)} BSS</span>
-                            </p>
-                             <p class="text-xs text-gray-400 mb-2">
-                                (Доход: ${formatBSS(nextIncome)} BSS / ${nextCycle.toFixed(1)} сек)
-                            </p>
-                            <button 
-                                onclick="upgradeIndustry(${baseInd.id})" 
-                                class="w-full btn btn-secondary mb-2"
-                                ${gameState.balance < nextCost ? 'disabled' : ''}
-                            >
-                                ${!isBought ? 'Купить' : 'Повысить уровень'}
-                            </button>
-                        ` : `<p class="text-lg font-bold text-yellow-600">Макс. уровень (100)</p>`}
-                        
-                    </div>
+                    <p class="text-sm text-gray-400">Накопленная прибыль:</p>
+                    <p id="profit-display" class="text-2xl font-bold text-yellow-400">0 BSS</p>
                 </div>
-
-                <!-- Блок сбора прибыли и автоматизации -->
-                <div class="mt-4">
-                    ${isBought ? `
-                        <button 
-                            onclick="collectIncome(${baseInd.id})" 
-                            class="w-full btn btn-primary mb-2 ${collectPulseClass}"
-                            ${accruedIncome === 0 || indState.isManaged ? 'disabled' : ''}
-                        >
-                            Собрать (${formatBSS(accruedIncome)} BSS)
-                        </button>
-                    ` : ''}
-                    
-                    ${isBought && !indState.isManaged ? `
-                        <p class="text-xs text-gray-500 mb-2">Ответственный (10 циклов): ${formatBSS(managerCost)} BSS</p>
-                        <button 
-                            onclick="hireManager(${baseInd.id})" 
-                            class="w-full btn bg-indigo-500 hover:bg-indigo-600 text-white"
-                            ${gameState.balance < managerCost ? 'disabled' : ''}
-                        >
-                            Назначить Ответственного
-                        </button>
-                    ` : isBought && indState.isManaged ? `
-                        <p class="text-sm font-bold text-green-500 mt-2 p-2 bg-green-50 rounded-lg">✅ Ответственный (Автосбор)</p>
-                    ` : ''}
-                </div>
+                <button id="collect-button" class="profit-button bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg disabled:opacity-50" disabled>
+                    Собрать
+                </button>
             </div>
-        `;
-    }
+            <p id="production-display" class="text-sm text-gray-400 mt-2 text-right">
+                Общий доход за цикл: 0 BSS
+            </p>
+        </div>
 
-    /**
-     * Обновляет список отраслей.
-     */
-    function renderIndustries() {
-        const listElement = document.getElementById('industries-list');
-        listElement.innerHTML = gameState.industries.map(indState => {
-            const baseInd = BASE_INDUSTRIES.find(b => b.id === indState.id);
-            return createIndustryCard(indState, baseInd);
-        }).join('');
-    }
+        <!-- Сообщения и статус -->
+        <div id="loading-status" class="text-center py-4 text-sky-400 font-semibold">
+            Загрузка данных...
+        </div>
+        <div id="message-box" class="card bg-red-800 text-white p-3 mb-4 hidden"></div>
 
-    // --- ФУНКЦИИ УПРАВЛЕНИЯ ИГРОЙ ---
+        <!-- Список купленных отраслей -->
+        <div class="section-title">🏭 Мои Отрасли</div>
+        <div id="owned-industries-list" class="space-y-3">
+            <p class="text-gray-400 text-center" id="no-industries-msg">
+                У вас еще нет отраслей. Купите первую!
+            </p>
+        </div>
 
-    /**
-     * Обновляет состояние игры в базе данных.
-     */
-    async function saveGameState() {
-        if (!gameStateDocRef || !isAuthReady) {
-            console.error("Firebase не готов или DocRef не определен.");
-            return;
+        <!-- Список доступных отраслей -->
+        <div class="section-title">🛒 Доступные Отрасли</div>
+        <div id="available-industries-list" class="space-y-4">
+            <!-- Список будет заполнен JS -->
+        </div>
+
+    </div>
+
+    <script>
+        // Глобальные переменные и константы
+        // NOTE: В реальном Mini App USER_ID должен извлекаться из WebApp.initDataUnsafe
+        // Для Canvas используем тестовый ID
+        const USER_ID = "test_user_12345"; 
+        const BASE_API_URL = window.location.origin; 
+        
+        // DOM Elements
+        const scoreDisplay = document.getElementById('score-display');
+        const profitDisplay = document.getElementById('profit-display');
+        const productionDisplay = document.getElementById('production-display');
+        const collectButton = document.getElementById('collect-button');
+        const loadingStatus = document.getElementById('loading-status');
+        const messageBox = document.getElementById('message-box');
+        const ownedList = document.getElementById('owned-industries-list');
+        const availableList = document.getElementById('available-industries-list');
+        const noIndustriesMsg = document.getElementById('no-industries-msg');
+
+        // Game State (Global)
+        let masterIndustries = [];
+        let playerState = {
+            score: 0,
+            industries: [],
+            accumulated_profit: 0,
+            total_production: 0,
+            last_check_time: 0
+        };
+        
+        // Интервал обновления UI (для таймера прибыли)
+        let uiUpdateInterval = null;
+
+        /**
+         * Отображает временное сообщение об успехе или ошибке.
+         */
+        function showMessage(text, isError = false) {
+            messageBox.textContent = text;
+            messageBox.className = `card p-3 mb-4 ${isError ? 'bg-red-800' : 'bg-blue-600'} text-white`;
+            messageBox.classList.remove('hidden');
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, 3000);
         }
 
-        try {
-            // Сохраняем только те данные, которые могут измениться
-            const dataToSave = {
-                balance: gameState.balance,
-                lastCollectionTime: Date.now(),
-                industries: gameState.industries.map(ind => ({
-                    id: ind.id,
-                    level: ind.level,
-                    isManaged: ind.isManaged,
-                    lastCollectionTime: ind.lastCollectionTime
-                }))
-            };
-            await setDoc(gameStateDocRef, dataToSave, { merge: true });
-        } catch (error) {
-            console.error("Ошибка сохранения состояния игры:", error);
-        }
-    }
+        /**
+         * Выполняет API-запрос с обработкой ошибок.
+         */
+        async function apiRequest(endpoint, method = 'GET') {
+            try {
+                const url = `${BASE_API_URL}${endpoint}`;
+                const response = await fetch(url, { method });
 
-    /**
-     * Повышает уровень отрасли или покупает ее.
-     * @param {number} industryId
-     */
-    window.upgradeIndustry = async function(industryId) {
-        const indState = gameState.industries.find(i => i.id === industryId);
-        const baseInd = BASE_INDUSTRIES.find(b => b.id === industryId);
-
-        if (!indState || !baseInd) return;
-
-        const nextCost = calculateCost(baseInd.startCost, indState.level);
-
-        if (gameState.balance < nextCost) {
-            showModal("Недостаточно средств", `Для покупки/улучшения "${baseInd.name}" требуется ${formatBSS(nextCost)} BSS.`);
-            return;
-        }
-        if (indState.level >= 100) {
-            showModal("Максимальный уровень", `Отрасль "${baseInd.name}" уже достигла максимального уровня.`);
-            return;
-        }
-        
-        // Списываем средства
-        gameState.balance -= nextCost;
-        
-        // Повышаем уровень
-        indState.level += 1;
-        
-        // Если только что куплено, устанавливаем время последней коллекции на сейчас
-        if (indState.level === 1) {
-            indState.lastCollectionTime = Date.now();
-        }
-
-        updateBalanceUI();
-        renderIndustries();
-        await saveGameState();
-    }
-
-    /**
-     * Сбор накопленной прибыли с отрасли.
-     * @param {number} industryId
-     */
-    window.collectIncome = async function(industryId) {
-        const indState = gameState.industries.find(i => i.id === industryId);
-        const baseInd = BASE_INDUSTRIES.find(b => b.id === industryId);
-
-        if (!indState || !baseInd || indState.level === 0) return;
-        if (indState.isManaged) return; // Автоматизированные отрасли не собираются вручную
-
-        const accruedIncome = calculateAccumulatedIncome(indState, baseInd, Date.now());
-
-        if (accruedIncome === 0) {
-            showModal("Нет прибыли", `У отрасли "${baseInd.name}" нет накопленной прибыли для сбора.`);
-            return;
-        }
-        
-        // Время цикла
-        const cycleTimeMs = calculateCycleTime(baseInd.cycleTime, indState.level);
-        
-        // Время, которое нужно добавить к lastCollectionTime
-        const timePassed = Date.now() - indState.lastCollectionTime;
-        const cyclesCompleted = Math.floor(timePassed / cycleTimeMs);
-        const timeToAdvance = cyclesCompleted * cycleTimeMs;
-
-
-        // Добавляем прибыль
-        gameState.balance += accruedIncome;
-        
-        // Сбрасываем таймер: время последней коллекции сдвигается вперед
-        indState.lastCollectionTime += timeToAdvance;
-
-        showModal("Сбор прибыли", `Вы собрали ${formatBSS(accruedIncome)} BSS от "${baseInd.name}"!`);
-        updateBalanceUI();
-        renderIndustries();
-        await saveGameState();
-    }
-    
-    /**
-     * Нанимает Ответственного (менеджера) для автоматического сбора прибыли.
-     * @param {number} industryId
-     */
-    window.hireManager = async function(industryId) {
-        const indState = gameState.industries.find(i => i.id === industryId);
-        const baseInd = BASE_INDUSTRIES.find(b => b.id === industryId);
-
-        if (!indState || !baseInd || indState.level === 0) return;
-        if (indState.isManaged) return;
-
-        // Стоимость - 10 циклов
-        const managerCost = calculateCost(baseInd.startCost, indState.level) * 10;
-
-        if (gameState.balance < managerCost) {
-            showModal("Недостаточно средств", `Назначение Ответственного требует ${formatBSS(managerCost)} BSS.`);
-            return;
-        }
-
-        gameState.balance -= managerCost;
-        indState.isManaged = true;
-
-        showModal("Ответственный назначен!", `Отрасль "${baseInd.name}" теперь будет собирать прибыль автоматически.`);
-        updateBalanceUI();
-        renderIndustries();
-        await saveGameState();
-    }
-
-
-    // --- FIREBASE И АВТОРИЗАЦИЯ ---
-
-    /**
-     * Обрабатывает загрузку начального состояния игры из Firestore.
-     * @param {Object} data - Данные из Firestore
-     */
-    function handleInitialLoad(data) {
-        let needsSave = false;
-        
-        if (data) {
-            // Загружаем данные из базы
-            gameState.balance = data.balance || 0;
-            gameState.industries = data.industries || gameState.industries;
-            
-            // Проверяем оффлайн-прогресс для автоматизированных отраслей
-            const currentTime = Date.now();
-            const { totalOfflineIncome, updatedIndustries } = updateGameStateForOfflineProgress(gameState, currentTime);
-            
-            if (totalOfflineIncome > 0) {
-                gameState.balance += totalOfflineIncome;
-                gameState.industries = updatedIndustries;
-                showModal("Оффлайн-прогресс", `Пока вас не было, автоматизированные отрасли заработали ${formatBSS(totalOfflineIncome)} BSS!`);
-                needsSave = true;
-            }
-        } else {
-            // Если данных нет, сохраняем начальное состояние
-            needsSave = true;
-        }
-        
-        // Проверяем, что все 10 отраслей существуют в состоянии игры (для совместимости)
-        if (gameState.industries.length < BASE_INDUSTRIES.length) {
-            BASE_INDUSTRIES.forEach(baseInd => {
-                if (!gameState.industries.find(i => i.id === baseInd.id)) {
-                    gameState.industries.push({
-                        id: baseInd.id,
-                        level: 0,
-                        isManaged: false,
-                        lastCollectionTime: Date.now()
-                    });
-                    needsSave = true;
+                // Проверка на ошибку HTTP-статуса
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
                 }
-            });
-        }
-
-
-        updateBalanceUI();
-        renderIndustries();
-        if (needsSave) {
-            saveGameState();
-        }
-        
-        // Запуск основного игрового цикла
-        setInterval(gameLoop, 100); 
-    }
-
-    /**
-     * Инициализирует Firebase и подписывается на изменения состояния игры.
-     */
-    async function initializeFirebase() {
-        try {
-            app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-            
-            if (initialAuthToken) {
-                await signInWithCustomToken(auth, initialAuthToken);
-            } else {
-                // Если токен не предоставлен, входим анонимно
-                await signInAnonymously(auth);
-            }
-
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    userId = user.uid;
-                    // Путь: /artifacts/{appId}/users/{userId}/gameState/main
-                    gameStateDocRef = doc(db, 'artifacts', appId, 'users', userId, 'gameState', 'main');
-                    isAuthReady = true;
-
-                    // Подписываемся на изменения в реальном времени
-                    onSnapshot(gameStateDocRef, (doc) => {
-                        const data = doc.data();
-                        
-                        // Если это первый запуск или данные изменились, загружаем их
-                        if (data && (!gameState.lastCollectionTime || data.lastCollectionTime > gameState.lastCollectionTime)) {
-                            // Логика загрузки, предотвращающая петлю
-                            gameState.balance = data.balance || 0;
-                            gameState.industries = data.industries || gameState.industries;
-                            // lastCollectionTime используется только для оффлайн-прогресса и не сохраняется в gameState
-                            
-                            updateBalanceUI();
-                            renderIndustries();
-                        } else if (!data) {
-                            // Если документ не существует, инициализируем игру
-                             handleInitialLoad(null);
-                        }
-                    }, (error) => {
-                        console.error("Ошибка при получении данных Firestore:", error);
-                        // Попробуем загрузить данные один раз
-                         handleInitialLoad(null);
-                    });
-
-                    // Загрузка начального состояния один раз для обработки оффлайн-прогресса
-                    const docSnap = await getDoc(gameStateDocRef);
-                    handleInitialLoad(docSnap.data());
-
-                } else {
-                    console.log("Пользователь не аутентифицирован. Используется анонимный вход.");
-                    // Продолжаем игру без сохранения, если не удалось аутентифицироваться
-                    isAuthReady = false;
-                    handleInitialLoad(null); // Запускаем игру без сохранения
-                }
-            });
-
-        } catch (error) {
-            console.error("FATAL: Ошибка инициализации Firebase.", error);
-            showModal("Ошибка", "Не удалось подключиться к базе данных. Проверьте настройки Firebase.");
-        }
-    }
-    
-    // --- ОСНОВНОЙ ИГРОВОЙ ЦИКЛ ---
-
-    /**
-     * Основной цикл игры, который обновляет UI и обрабатывает автосбор.
-     */
-    async function gameLoop() {
-        const currentTime = Date.now();
-        let needsSave = false;
-
-        // 1. Автоматический сбор (только для isManaged)
-        gameState.industries.forEach(indState => {
-            if (indState.level > 0 && indState.isManaged) {
-                const baseInd = BASE_INDUSTRIES.find(b => b.id === indState.id);
-                const incomePerCycle = calculateIncome(baseInd.baseIncome, indState.level);
-                const cycleTime = calculateCycleTime(baseInd.cycleTime, indState.level);
-
-                const timePassed = currentTime - indState.lastCollectionTime;
                 
-                // Сколько полных циклов прошло
-                const cyclesCompleted = Math.floor(timePassed / cycleTime);
-
-                if (cyclesCompleted > 0) {
-                    const income = cyclesCompleted * incomePerCycle;
-                    gameState.balance += income;
-                    
-                    // Обновляем время последней коллекции на момент завершения последнего цикла
-                    indState.lastCollectionTime += cyclesCompleted * cycleTime;
-                    needsSave = true;
-                }
+                return await response.json();
+            } catch (error) {
+                console.error("API Request Failed:", error);
+                showMessage(`Ошибка API: ${error.message}`, true);
+                return null;
             }
-        });
-        
-        if (needsSave) {
-            updateBalanceUI();
-            await saveGameState();
         }
 
-        // 2. Обновление UI прогресса (для всех отраслей)
-        renderIndustries(); 
-    }
+        // --- RENDER FUNCTIONS ---
+        
+        /**
+         * Рендеринг карточки купленной отрасли.
+         */
+        function renderOwnedIndustry(industry, masterData) {
+            const industryData = masterData.find(d => d.id === industry.id);
+            if (!industryData) return '';
 
+            const currentIncome = industryData.base_income * industry.level;
 
-    // Начинаем игру, как только DOM загрузится
-    window.onload = initializeFirebase;
-</script>
+            return `
+                <div class="card border border-sky-600/50 flex justify-between items-center">
+                    <div>
+                        <p class="text-xl font-bold text-sky-300">${industryData.name} (Ур. ${industry.level})</p>
+                        <p class="text-sm text-gray-400">
+                            Доход: +${currentIncome.toLocaleString()} BSS / ${industryData.cycle_time_sec} сек
+                        </p>
+                    </div>
+                    <!-- Кнопка улучшения -->
+                    <button data-industry-id="${industry.id}" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg text-sm disabled:opacity-50" disabled>
+                        Улучшить
+                    </button>
+                </div>
+            `;
+        }
+
+        /**
+         * Рендеринг карточки доступной для покупки отрасли.
+         */
+        function renderAvailableIndustry(industry) {
+            // Проверяем, куплена ли уже эта отрасль хотя бы один раз
+            const isOwned = playerState.industries.some(ind => ind.id === industry.id);
+            const canAfford = playerState.score >= industry.base_cost;
+            
+            // Если отрасль уже куплена, ее нельзя купить снова
+            const isDisabled = isOwned || !canAfford;
+            
+            return `
+                <div class="card border border-slate-500/50">
+                    <div class="flex justify-between items-start">
+                        <h3 class="text-lg font-semibold text-white">${industry.id}. ${industry.name}</h3>
+                        <p class="text-sm text-yellow-300 font-bold">${industry.base_cost.toLocaleString()} BSS</p>
+                    </div>
+                    <p class="text-sm text-gray-400 mt-1 mb-3">${industry.description}</p>
+                    <div class="flex justify-end">
+                        <button 
+                            data-industry-id="${industry.id}"
+                            data-cost="${industry.base_cost}"
+                            class="buy-button bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg text-sm disabled:opacity-50"
+                            ${isDisabled ? 'disabled' : ''}
+                        >
+                            ${isOwned ? 'Куплено' : 'Купить'}
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        /**
+         * Обновляет весь интерфейс на основе глобального playerState.
+         */
+        function updateUI() {
+            // 1. Обновление счета
+            scoreDisplay.textContent = playerState.score.toLocaleString() + ' BSS';
+            
+            // 2. Обновление накопленной прибыли
+            profitDisplay.textContent = playerState.accumulated_profit.toLocaleString() + ' BSS';
+            collectButton.disabled = playerState.accumulated_profit === 0;
+            
+            // 3. Обновление общей производственной мощности
+            productionDisplay.textContent = `Общий доход за цикл: ${playerState.total_production.toLocaleString()} BSS`;
+            
+            // 4. Рендеринг купленных отраслей
+            if (playerState.industries.length === 0) {
+                ownedList.innerHTML = `<p class="text-gray-400 text-center">
+                    У вас еще нет отраслей. Купите первую!
+                </p>`;
+            } else {
+                ownedList.innerHTML = playerState.industries
+                    .map(ind => renderOwnedIndustry(ind, masterIndustries))
+                    .join('');
+            }
+
+            // 5. Рендеринг доступных отраслей
+            const availableToBuy = masterIndustries.filter(masterInd => 
+                !playerState.industries.some(ownedInd => ownedInd.id === masterInd.id)
+            );
+
+            if (availableToBuy.length > 0) {
+                availableList.innerHTML = masterIndustries
+                    .map(industry => renderAvailableIndustry(industry))
+                    .join('');
+            } else if (playerState.industries.length === masterIndustries.length) {
+                availableList.innerHTML = `<p class="text-green-400 text-center font-semibold">
+                    Поздравляем! Вы купили все доступные отрасли.
+                </p>`;
+            } else {
+                 availableList.innerHTML = `<p class="text-gray-400 text-center">
+                    Покупайте, чтобы открыть новые отрасли!
+                </p>`;
+            }
+                
+            // 6. Обновление слушателей покупки
+            attachBuyListeners();
+        }
+
+        /**
+         * Периодически обновляет расчет прибыли (каждую секунду) на стороне клиента.
+         */
+        function periodicProfitUpdate() {
+            if (playerState.total_production > 0) {
+                const currentTime = Math.floor(Date.now() / 1000);
+                const timePassedSinceLastCheck = currentTime - playerState.last_check_time;
+                
+                let tempProfit = 0;
+                let hasProfit = false;
+                
+                // Пересчитываем прибыль, основываясь на данных мастера и времени
+                for (const ownedIndustry of playerState.industries) {
+                    const masterData = masterIndustries.find(d => d.id === ownedIndustry.id);
+                    if (!masterData) continue;
+                    
+                    const currentIncome = masterData.base_income * ownedIndustry.level;
+                    const currentCycleTime = masterData.cycle_time_sec;
+                    
+                    if (currentCycleTime > 0) {
+                        const cyclesCompleted = Math.floor(timePassedSinceLastCheck / currentCycleTime);
+                        tempProfit += cyclesCompleted * currentIncome;
+                        if (cyclesCompleted > 0) hasProfit = true;
+                    }
+                }
+                
+                playerState.accumulated_profit = tempProfit;
+                profitDisplay.textContent = tempProfit.toLocaleString() + ' BSS';
+                collectButton.disabled = !hasProfit;
+
+                // Обновляем состояние кнопок покупки (на случай, если накопили достаточно денег)
+                attachBuyListeners(); 
+            }
+        }
+        
+        /**
+         * Устанавливает слушатели событий для кнопок покупки.
+         */
+        function attachBuyListeners() {
+            document.querySelectorAll('.buy-button').forEach(button => {
+                const cost = parseInt(button.dataset.cost);
+                const industryId = parseInt(button.dataset.industryId);
+                
+                // Проверка, может ли игрок позволить себе покупку
+                const isOwned = playerState.industries.some(ind => ind.id === industryId);
+                button.disabled = isOwned || playerState.score < cost;
+                
+                // Удаляем старые слушатели, чтобы избежать дублирования
+                button.removeEventListener('click', handleBuy);
+                
+                // Добавляем новый слушатель
+                button.addEventListener('click', handleBuy);
+            });
+        }
+        
+        // --- EVENT HANDLERS ---
+        
+        async function handleCollect() {
+            collectButton.disabled = true;
+            showMessage("Сбор прибыли...");
+            
+            // Используем USER_ID в пути
+            const data = await apiRequest(`/collect/${USER_ID}`, 'POST');
+            
+            if (data) {
+                playerState.score = data.score;
+                playerState.accumulated_profit = 0; // Сбрасываем после сбора
+                playerState.last_check_time = Math.floor(Date.now() / 1000); // Обновляем время
+                showMessage(`Успешно собрано ${data.collected.toLocaleString()} BSS!`);
+                updateUI();
+            } else {
+                 collectButton.disabled = false; // Включаем, если произошла ошибка
+            }
+        }
+        
+        async function handleBuy(event) {
+            const button = event.currentTarget;
+            button.disabled = true;
+            const industryId = parseInt(button.dataset.industryId);
+            
+            showMessage(`Покупка отрасли #${industryId}...`);
+            
+            // Используем USER_ID и industryId в пути
+            const data = await apiRequest(`/buy/${USER_ID}/${industryId}`, 'POST');
+            
+            if (data) {
+                playerState.score = data.score;
+                playerState.industries.push(data.new_industry); // Добавляем новую отрасль
+                playerState.total_production = data.total_production;
+                showMessage(`Вы успешно купили ${data.new_industry.industry_name}!`);
+                updateUI();
+            }
+            
+            // Кнопка будет повторно активирована через updateUI
+            button.disabled = false;
+        }
+
+        /**
+         * Основная функция для инициализации игры.
+         */
+        async function initGame() {
+            loadingStatus.textContent = "Загрузка мастер-данных...";
+            
+            // 1. Загрузка мастер-данных
+            const masterData = await apiRequest('/master-data');
+            if (!masterData) {
+                loadingStatus.textContent = "Ошибка при загрузке данных игры. Перезагрузите страницу.";
+                return;
+            }
+            masterIndustries = masterData;
+            
+            loadingStatus.textContent = "Загрузка состояния игрока...";
+
+            // 2. Загрузка состояния игрока
+            const stateData = await apiRequest(`/state/${USER_ID}`);
+            if (!stateData) {
+                 loadingStatus.textContent = "Ошибка при загрузке состояния игрока.";
+                 return;
+            }
+
+            // Обновление глобального состояния
+            playerState = {
+                score: stateData.score,
+                industries: stateData.industries,
+                accumulated_profit: stateData.accumulated_profit,
+                total_production: stateData.total_production,
+                last_check_time: stateData.last_check_time || Math.floor(Date.now() / 1000)
+            };
+            
+            loadingStatus.classList.add('hidden');
+
+            // 3. Установка слушателей событий
+            collectButton.addEventListener('click', handleCollect);
+            attachBuyListeners();
+
+            // 4. Запуск UI
+            updateUI();
+            
+            // 5. Запуск периодического обновления прибыли
+            if (uiUpdateInterval) clearInterval(uiUpdateInterval);
+            uiUpdateInterval = setInterval(periodicProfitUpdate, 1000); 
+            
+            // Делаем первичное обновление прибыли сразу после загрузки
+            periodicProfitUpdate();
+        }
+
+        // --- Firebase/Auth Setup (Mandatory in Canvas) ---
+        
+        // Вставляем пустой блок для обеспечения наличия обязательных импортов
+        // и переменных Firebase, даже если мы не используем их напрямую в этом JS коде.
+        // Это необходимо для корректной работы среды Canvas.
+        
+        /* import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Имитация глобальных переменных Canvas (для проверки и избежания ошибок)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Простая инициализация, чтобы избежать ошибок среды
+        try {
+             if (Object.keys(firebaseConfig).length > 0) {
+                 const app = initializeApp(firebaseConfig);
+                 const auth = getAuth(app);
+                 if (initialAuthToken) {
+                    signInWithCustomToken(auth, initialAuthToken).catch(console.error);
+                 } else {
+                    signInAnonymously(auth).catch(console.error);
+                 }
+             }
+        } catch (e) {
+            console.error("Firebase Auth setup failed:", e);
+        }
+        */
+        
+        // Запуск игры после загрузки DOM
+        window.onload = initGame;
+    </script>
 </body>
 </html>
