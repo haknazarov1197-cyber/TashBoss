@@ -3,83 +3,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TashBoss Clicker</title>
-    <!-- Подключение Tailwind CSS -->
+    <title>TashBoss Clicker - ТашКлик</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Установка шрифта Inter -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        
-        /* Основные стили для центрирования и фона */
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #8b5cf6;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+            --background-dark: #1f2937;
+            --background-light: #f3f4f6;
+            --text-color: #d1d5db;
+        }
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f7f7f7;
+            background-color: var(--background-dark);
+            color: var(--text-color);
+            transition: all 0.3s ease;
+            min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: flex-start;
-            min-height: 100vh;
             padding: 20px;
         }
-        .game-container {
+        .container {
+            width: 100%;
             max-width: 420px;
-            width: 100%;
-            background: white;
-            border-radius: 1rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            overflow: hidden;
+            background-color: #374151;
+            border-radius: 1.5rem;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
             padding: 1.5rem;
-            border: 4px solid #3b82f6;
-            /* Начинаем игру скрытой, чтобы показать загрузчик */
-            opacity: 0;
-            transition: opacity 0.5s;
         }
-        
-        /* Стили для кликабельных элементов */
-        .click-button {
-            transition: all 0.1s;
-            box-shadow: 0 4px 0 0 #1e40af;
+        .clickable-area {
+            position: relative;
+            cursor: pointer;
+            user-select: none;
+            touch-action: manipulation;
+            transition: transform 0.1s ease;
         }
-        .click-button:active {
-            transform: translateY(2px);
-            box-shadow: 0 2px 0 0 #1e40af;
+        .clickable-area:active {
+            transform: scale(0.98);
         }
-        .buy-button {
-            transition: all 0.2s;
+        .pulse-effect {
+            animation: pulse-ring 0.6s cubic-bezier(0, 0, 0.2, 1) forwards;
         }
-        .buy-button:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        @keyframes pulse-ring {
+            0% { transform: scale(1); opacity: 0.7; }
+            100% { transform: scale(1.5); opacity: 0; }
         }
-        .buy-button:disabled {
-            cursor: not-allowed;
-            opacity: 0.5;
-            background-color: #6b7280;
-            box-shadow: none;
+        .click-animation {
+            position: absolute;
+            pointer-events: none;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--warning-color);
+            opacity: 1;
+            animation: click-fly 0.8s ease-out forwards;
+            z-index: 100;
         }
-        
-        /* Стили для полноэкранного загрузчика */
-        #full-screen-loader {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #ffffff; /* Белый фон вместо черного */
+        @keyframes click-fly {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(-50px); opacity: 0; }
+        }
+        .status-bar {
+            border-radius: 0.75rem;
+            padding: 0.5rem 1rem;
+            margin-bottom: 1rem;
+            font-weight: 500;
             display: flex;
-            flex-direction: column;
-            justify-content: center;
+            justify-content: space-between;
             align-items: center;
-            z-index: 1000;
-            transition: opacity 0.5s ease;
         }
-        .loader-spinner {
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #3b82f6;
+        .status-online {
+            background-color: var(--success-color);
+            color: white;
+        }
+        .status-local {
+            background-color: var(--warning-color);
+            color: #1f2937;
+        }
+        .status-error {
+            background-color: var(--error-color);
+            color: white;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top: 4px solid white;
             border-radius: 50%;
-            width: 60px;
-            height: 60px;
+            width: 20px;
+            height: 20px;
             animation: spin 1s linear infinite;
-            margin-bottom: 20px;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -89,427 +104,515 @@
 </head>
 <body>
 
-<!-- ПОЛНОЭКРАННЫЙ ЗАГРУЗЧИК -->
-<div id="full-screen-loader">
-    <div class="loader-spinner"></div>
-    <p class="text-xl font-semibold text-gray-700">Инициализация и подключение к базе данных...</p>
-    <p class="text-sm text-gray-500 mt-2">Пожалуйста, подождите.</p>
-</div>
-<!-- КОНЕЦ ЗАГРУЗЧИКА -->
-
-<div id="game-app" class="game-container">
-    <h1 class="text-4xl font-extrabold text-center text-blue-700 mb-6">TashBoss Clicker</h1>
-
-    <!-- Блок состояния пользователя -->
-    <div class="bg-blue-50 p-4 rounded-xl mb-4 border border-blue-200">
-        <p id="auth-status" class="text-sm font-semibold text-gray-700 mb-1">
-            <span class="inline-block w-3 h-3 bg-red-500 rounded-full mr-2 animate-pulse"></span>
-            <span id="auth-text">Загрузка данных и аутентификация...</span>
-        </p>
-        <p id="user-id-display" class="text-xs text-gray-500 truncate" title="Ваш ID пользователя">
-            ID: <span id="user-id-value">Ожидание...</span>
-        </p>
+<div id="app" class="container">
+    <div id="status-bar" class="status-bar status-error">
+        <span id="status-text">Загрузка...</span>
+        <div id="status-icon" class="spinner"></div>
     </div>
 
-    <!-- Блок счета -->
-    <div class="bg-white p-6 rounded-xl border-2 border-indigo-500 mb-6 text-center shadow-lg">
-        <p class="text-2xl text-gray-600 font-medium">BSS (Билеты на Социальное Счастье):</p>
-        <p id="score-display" class="text-6xl font-black text-indigo-700 mt-2">0</p>
-        <p id="dps-display" class="text-md text-gray-500 mt-1">Доход в секунду (ДВС): 0</p>
-    </div>
-
-    <!-- Кнопка клика -->
-    <button id="click-button"
-            class="click-button w-full bg-blue-500 text-white p-4 text-2xl font-bold rounded-xl mb-6 shadow-xl hover:bg-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-300 disabled:bg-gray-400"
-            onclick="handleManualClick()" disabled>
-        Ткнуть (BSS +1)
-    </button>
-
-    <!-- Раздел менеджеров -->
-    <div class="bg-gray-100 p-4 rounded-xl">
-        <h2 class="text-xl font-bold text-gray-700 mb-3 border-b pb-2 border-gray-300">Наемные менеджеры</h2>
-
-        <!-- Менеджер 1: Уборка улиц -->
-        <div id="manager-1" class="flex justify-between items-center bg-white p-3 rounded-lg mb-2 shadow-md">
-            <div>
-                <p class="font-semibold text-lg">🧹 Уборка улиц</p>
-                <p class="text-sm text-gray-500">Доход: <span id="manager-1-dps">1</span> ДВС</p>
-                <p class="text-sm text-gray-500">У вас: <span id="manager-1-count">0</span></p>
-            </div>
-            <button id="buy-manager-1-button"
-                    class="buy-button bg-green-500 text-white px-4 py-2 rounded-lg font-bold shadow-md hover:bg-green-600 disabled:bg-gray-500"
-                    onclick="buyManager(1)" disabled>
-                Купить (100 BSS)
-            </button>
-        </div>
+    <!-- Основной интерфейс игры -->
+    <div class="text-center space-y-4">
+        <h1 class="text-3xl font-extrabold text-white mb-6">TashBoss Clicker</h1>
         
-        <!-- Менеджер 2: Ремонт дорог -->
-        <div id="manager-2" class="flex justify-between items-center bg-white p-3 rounded-lg mb-2 shadow-md">
-            <div>
-                <p class="font-semibold text-lg">🚧 Ремонт дорог</p>
-                <p class="text-sm text-gray-500">Доход: <span id="manager-2-dps">10</span> ДВС</p>
-                <p class="text-sm text-gray-500">У вас: <span id="manager-2-count">0</span></p>
+        <!-- Очки -->
+        <div class="bg-gray-700 p-4 rounded-xl shadow-inner">
+            <p class="text-sm uppercase tracking-wider text-gray-400">Баланс (UZS)</p>
+            <p id="score-display" class="text-6xl font-black text-lime-400">0</p>
+            <p id="tps-display" class="text-md text-gray-300 mt-1">Кликов в секунду: +0</p>
+        </div>
+
+        <!-- Кликабельная область (логотип) -->
+        <div id="clickable-area" class="clickable-area bg-gray-600 p-6 rounded-full inline-block mt-8 mb-8 shadow-2xl hover:shadow-lg transition-all duration-300">
+            <!-- Иконка Boss (можно заменить на ваше лого) -->
+            <svg class="w-24 h-24 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-1.025-8.745-2.745M12 18h.01M12 12a2.5 2.5 0 110-5 2.5 2.5 0 010 5zm0 0v6m0-6h6m-6 0H6"/>
+            </svg>
+        </div>
+
+        <!-- Кнопки улучшений -->
+        <div id="upgrades-list" class="space-y-3 pt-4">
+            <!-- Улучшения будут добавлены сюда JavaScript -->
+        </div>
+
+        <!-- Диалог сообщения (вместо alert) -->
+        <div id="message-dialog" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+            <div class="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-xs w-full">
+                <p id="dialog-text" class="text-lg text-white mb-4"></p>
+                <button id="dialog-close-button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">OK</button>
             </div>
-            <button id="buy-manager-2-button"
-                    class="buy-button bg-green-500 text-white px-4 py-2 rounded-lg font-bold shadow-md hover:bg-green-600 disabled:bg-gray-500"
-                    onclick="buyManager(2)" disabled>
-                Купить (1,000 BSS)
-            </button>
         </div>
 
-    </div>
-
-    <!-- Модальное окно для сообщений (вместо alert) -->
-    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
-        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
-            <h3 id="modal-title" class="text-xl font-bold mb-3 text-red-600">Ошибка!</h3>
-            <p id="modal-message" class="text-gray-700 mb-4">Недостаточно BSS.</p>
-            <button onclick="closeModal()" class="w-full bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600">Закрыть</button>
-        </div>
     </div>
 </div>
 
 <script type="module">
-    // Глобальные переменные, предоставляемые средой Canvas
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-    // Импорты Firebase
+    // Firebase Imports
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, onSnapshot, setDoc, runTransaction, setLogLevel, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot, runTransaction, enableIndexedDbPersistence, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    // Игровые переменные
+    // =========================================================================
+    // 1. GLOBAL VARIABLES AND SETUP
+    // =========================================================================
+
+    // MANDATORY VARIABLES from Canvas Environment
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    // Firebase instances
     let app, db, auth;
     let userId = null;
-    let isGameReady = false;
-    let gameData = {
-        score: 0,
-        dps: 0,
-        managers: {
-            1: 0,
-            2: 0
-        }
+    let isConnected = false;
+    let isAuthReady = false;
+
+    // Game state
+    let score = 0;
+    let clicksPerSecond = 0;
+    let clickValue = 1;
+    let lastSaveTimestamp = Date.now();
+
+    // DOM Elements
+    const scoreDisplay = document.getElementById('score-display');
+    const tpsDisplay = document.getElementById('tps-display');
+    const clickableArea = document.getElementById('clickable-area');
+    const upgradesList = document.getElementById('upgrades-list');
+    const statusBar = document.getElementById('status-bar');
+    const statusText = document.getElementById('status-text');
+    const statusIcon = document.getElementById('status-icon');
+    const messageDialog = document.getElementById('message-dialog');
+    const dialogText = document.getElementById('dialog-text');
+    const dialogCloseButton = document.getElementById('dialog-close-button');
+
+    // Upgrade configuration
+    const UPGRADES = [
+        { id: 'click-power', name: 'Сила Клика', basePrice: 10, multiplier: 1.5, type: 'click' },
+        { id: 'auto-click', name: 'АвтоКлик', basePrice: 100, multiplier: 1.8, type: 'auto' },
+        { id: 'speed-boost', name: 'Ускорение TPS', basePrice: 500, multiplier: 2.0, type: 'auto' }
+    ];
+
+    let userUpgrades = {}; // { 'click-power': { level: 0, price: 10, value: 1 }, ...}
+    
+    // =========================================================================
+    // 2. UTILITY FUNCTIONS
+    // =========================================================================
+
+    // Custom dialog function to replace alert()
+    function showDialog(message) {
+        dialogText.textContent = message;
+        messageDialog.classList.remove('hidden');
+        messageDialog.classList.add('flex');
+    }
+
+    dialogCloseButton.onclick = () => {
+        messageDialog.classList.add('hidden');
+        messageDialog.classList.remove('flex');
     };
     
-    // Конфигурация менеджеров
-    const MANAGER_CONFIG = {
-        1: { name: "Уборка улиц", baseCost: 100, baseDps: 1, countId: 'manager-1-count', buttonId: 'buy-manager-1-button', costText: '100 BSS' },
-        2: { name: "Ремонт дорог", baseCost: 1000, baseDps: 10, countId: 'manager-2-count', buttonId: 'buy-manager-2-button', costText: '1,000 BSS' }
-    };
-
-    // UI элементы
-    const gameApp = document.getElementById('game-app');
-    const loader = document.getElementById('full-screen-loader');
-    const scoreDisplay = document.getElementById('score-display');
-    const dpsDisplay = document.getElementById('dps-display');
-    const clickButton = document.getElementById('click-button');
-    const authStatus = document.getElementById('auth-status');
-    const authText = document.getElementById('auth-text');
-    const userIdValue = document.getElementById('user-id-value');
-
-    // Функция для отображения сообщений
-    function showModal(title, message, isError = true) {
-        document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-title').className = isError ? 'text-xl font-bold mb-3 text-red-600' : 'text-xl font-bold mb-3 text-green-600';
-        document.getElementById('modal-message').textContent = message;
-        document.getElementById('message-modal').classList.remove('hidden');
-        document.getElementById('message-modal').classList.add('flex');
-        console.log(`[CLICKER] Показано модальное окно: ${title} - ${message}`);
+    // Format number for display
+    function formatNumber(num) {
+        if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+        if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+        if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+        return num.toFixed(0);
     }
 
-    function closeModal() {
-        document.getElementById('message-modal').classList.add('hidden');
-        document.getElementById('message-modal').classList.remove('flex');
+    // Initialize user upgrades structure
+    UPGRADES.forEach(u => {
+        userUpgrades[u.id] = { level: 0, price: u.basePrice, value: u.type === 'click' ? 1 : 0 };
+    });
+
+    // =========================================================================
+    // 3. FIREBASE / AUTH / DATA HANDLING
+    // =========================================================================
+
+    function getFirestorePath(isPublic = false) {
+        if (!userId) {
+            console.error("User ID is not set. Cannot determine Firestore path.");
+            return null;
+        }
+        if (isPublic) {
+            // Public path for sharing data (not used in this single-player game, but good practice)
+            return `artifacts/${appId}/public/data/clicker_data/${userId}`;
+        } else {
+            // Private path for user data
+            return `artifacts/${appId}/users/${userId}/clicker_data/game_state`;
+        }
     }
 
-    /**
-     * Завершает процесс загрузки и показывает игру.
-     */
-    function finishLoading() {
-        isGameReady = true;
-        clickButton.disabled = false;
-        
-        // Плавное скрытие загрузчика
-        loader.style.opacity = '0';
-        loader.addEventListener('transitionend', () => {
-            loader.style.display = 'none';
-        }, { once: true });
-        
-        // Плавное появление игры
-        gameApp.style.opacity = '1';
+    async function initFirebaseAndAuth() {
+        if (!firebaseConfig) {
+            console.error("FATAL: Firebase config is missing. Starting in Local Mode.");
+            setLocalMode(true);
+            return;
+        }
 
-        console.log("[GAME] Игра готова к взаимодействию! Загрузчик скрыт.");
-    }
-
-
-    /**
-     * Инициализирует Firebase и настраивает аутентификацию.
-     */
-    async function initFirebase() {
-        console.log("[FIREBASE] Инициализация Firebase...");
         try {
-            // Устанавливаем уровень логирования для отладки Firestore
-            setLogLevel('debug');
-            
-            if (Object.keys(firebaseConfig).length === 0) {
-                console.error("[FIREBASE] Конфигурация Firebase пуста. Невозможно инициализировать.");
-                authText.textContent = "Ошибка: Конфигурация Firebase отсутствует.";
-                finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
-                return;
-            }
-
+            // 1. Initialize Firebase
             app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
-            
-            console.log("[FIREBASE] Приложение и Firestore инициализированы.");
+            setLogLevel('debug'); // Enable detailed logging
 
-            // Слушатель состояния аутентификации
-            onAuthStateChanged(auth, async (user) => {
+            // Optional: Enable offline support
+            await enableIndexedDbPersistence(db)
+                .catch((err) => {
+                    if (err.code == 'failed-precondition') {
+                        console.warn("Multiple tabs cannot use IndexedDB persistence simultaneously.");
+                    } else if (err.code == 'unimplemented') {
+                        console.warn("The current browser does not support IndexedDB persistence.");
+                    }
+                });
+
+            // 2. Authentication
+            if (initialAuthToken) {
+                // Use custom token provided by the Canvas environment
+                await signInWithCustomToken(auth, initialAuthToken);
+                console.log("Authentication successful using custom token.");
+            } else {
+                // Fallback to anonymous sign-in if token is missing
+                await signInAnonymously(auth);
+                console.warn("Custom token not available. Signed in anonymously.");
+            }
+            
+            // 3. Set Auth State Listener
+            onAuthStateChanged(auth, (user) => {
                 if (user) {
                     userId = user.uid;
-                    console.log(`[FIREBASE] Аутентификация успешна. UID: ${userId}`);
-                    authText.textContent = "Подключено";
-                    authStatus.querySelector('span').classList.replace('bg-red-500', 'bg-green-500');
-                    userIdValue.textContent = userId;
-                    
-                    // Как только пользователь аутентифицирован, загружаем данные игры
-                    loadGameData();
+                    isAuthReady = true;
+                    console.log("Auth State Changed: User is authenticated. UID:", userId);
+                    startDataListener(); // Start listening for data once authenticated
                 } else {
-                    // Попытка входа
-                    try {
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                            console.log("[FIREBASE] Вход с Custom Token.");
-                        } else {
-                            // Если токен не предоставлен, вход анонимно
-                            await signInAnonymously(auth);
-                            console.log("[FIREBASE] Анонимный вход.");
-                        }
-                    } catch (error) {
-                        console.error("[FIREBASE] Ошибка аутентификации:", error);
-                        authText.textContent = "Ошибка входа. См. консоль.";
-                        authStatus.querySelector('span').classList.replace('bg-red-500', 'bg-red-700');
-                        finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
-                    }
+                    // User signed out or failed to sign in
+                    userId = null;
+                    isAuthReady = true;
+                    isConnected = false;
+                    console.error("Auth State Changed: User is NOT authenticated.");
+                    setLocalMode(true);
                 }
             });
 
-        } catch (error) {
-            console.error("[FIREBASE] Критическая ошибка инициализации:", error);
-            authText.textContent = `Критическая ошибка: ${error.message}`;
-            finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
+        } catch (e) {
+            // Catch connection errors, config errors, etc.
+            console.error("FATAL: Firebase initialization failed. Error:", e.message);
+            // Use a fallback random UUID for userId for local storage if all else fails
+            userId = userId || crypto.randomUUID(); 
+            setLocalMode(true);
         }
     }
 
-    /**
-     * Загружает данные игры из Firestore и настраивает onSnapshot.
-     */
-    function loadGameData() {
-        if (!db || !userId) {
-            console.warn("[GAME] DB или userId не готовы для загрузки данных.");
-            return;
+    function setLocalMode(isLocal) {
+        isConnected = !isLocal;
+        if (isLocal) {
+            statusBar.className = 'status-bar status-local';
+            statusText.textContent = `Локальный режим | ID: ${userId.substring(0, 8)}...`;
+            statusIcon.className = 'w-3 h-3 bg-yellow-900 rounded-full'; // Yellow dot
+            console.warn("Running in LOCAL MODE. Progress will NOT be saved to Firestore.");
+            // In local mode, we just load defaults and start the game loop
+            loadStateLocally(); 
+            startGameLoop();
+        } else {
+            // This is handled by startDataListener when connection is successful
         }
-
-        const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
-        
-        console.log(`[GAME] Настройка слушателя данных для пути: ${gameDocRef.path}`);
-
-        // Слушатель в реальном времени
-        onSnapshot(gameDocRef, (docSnapshot) => {
-            if (docSnapshot.exists()) {
-                const data = docSnapshot.data();
-                gameData.score = data.score || 0;
-                gameData.dps = data.dps || 0;
-                gameData.managers = data.managers || { 1: 0, 2: 0 };
-                console.log("[GAME] Данные успешно загружены/обновлены. Счет:", gameData.score);
-            } else {
-                console.log("[GAME] Документ не существует. Установка начального состояния.");
-                // Создаем начальный документ, если его нет
-                setDoc(gameDocRef, { 
-                    score: 0, 
-                    dps: 0, 
-                    managers: { 1: 0, 2: 0 },
-                    lastUpdate: serverTimestamp() 
-                }, { merge: true }).catch(e => console.error("[FIREBASE] Ошибка установки начального документа:", e));
-            }
-            
-            // Обновляем UI после загрузки/обновления
-            updateUI();
-            
-            // Если игра еще не готова, завершаем загрузку
-            if (!isGameReady) {
-                finishLoading();
-            }
-        }, (error) => {
-            console.error("[FIREBASE] Ошибка получения данных onSnapshot:", error);
-            authText.textContent = "Ошибка загрузки данных. См. консоль.";
-            finishLoading(); // Завершаем загрузку, чтобы пользователь увидел ошибку
-        });
     }
 
-    /**
-     * Обновляет все элементы пользовательского интерфейса.
-     */
-    function updateUI() {
-        scoreDisplay.textContent = formatNumber(gameData.score);
-        dpsDisplay.textContent = `Доход в секунду (ДВС): ${formatNumber(gameData.dps)}`;
-        
-        // Обновление менеджеров
-        for (const id in MANAGER_CONFIG) {
-            const config = MANAGER_CONFIG[id];
-            const count = gameData.managers[id] || 0;
-            const cost = config.baseCost; // В этой версии стоимость не растет
+    function loadStateLocally() {
+        // Load state from session storage or use defaults
+        const savedScore = sessionStorage.getItem('score');
+        const savedUpgrades = sessionStorage.getItem('upgrades');
 
-            document.getElementById(config.countId).textContent = formatNumber(count);
-            // document.getElementById(config.buttonId).textContent = `Купить (${config.costText})`; // Оставим это статичным
-            
-            // Включаем/отключаем кнопку
-            const button = document.getElementById(config.buttonId);
-            if (isGameReady) {
-                button.disabled = gameData.score < cost;
+        if (savedScore) score = parseInt(savedScore);
+        if (savedUpgrades) userUpgrades = JSON.parse(savedUpgrades);
+
+        updateGameMetrics();
+        renderUpgrades();
+    }
+
+    function saveStateLocally() {
+        sessionStorage.setItem('score', score.toFixed(0));
+        sessionStorage.setItem('upgrades', JSON.stringify(userUpgrades));
+    }
+
+    // Called once authentication is complete
+    function startDataListener() {
+        if (!db || !userId) return;
+
+        const path = getFirestorePath(false);
+        if (!path) return;
+
+        console.log("Starting Firestore listener on path:", path);
+        
+        // Use onSnapshot for real-time updates
+        const docRef = doc(db, path);
+
+        onSnapshot(docRef, 
+            (docSnapshot) => {
+                if (!isAuthReady) return; // Prevent firing before initial auth is complete
+
+                isConnected = true;
+                statusBar.className = 'status-bar status-online';
+                statusText.textContent = `Подключено | ID: ${userId.substring(0, 8)}...`;
+                statusIcon.className = 'w-3 h-3 bg-white rounded-full'; // White dot
+
+                if (docSnapshot.exists()) {
+                    console.log("Data received from Firestore.");
+                    loadGameState(docSnapshot.data());
+                } else {
+                    console.log("No existing data found. Creating new state.");
+                    saveGameState(); // Create initial document
+                }
+                
+                startGameLoop(); // Ensure game loop is running after data load
+            }, 
+            (error) => {
+                // Handle errors like permission denied, connection issues, etc.
+                console.error("Firestore snapshot error:", error.message);
+                isConnected = false;
+                // Fallback to local mode on real-time error
+                setLocalMode(true);
             }
+        );
+    }
+
+    function loadGameState(data) {
+        // Load main stats
+        score = data.score || 0;
+        clickValue = data.clickValue || 1;
+
+        // Load upgrades and prices
+        userUpgrades = data.upgrades || JSON.parse(JSON.stringify(userUpgrades));
+        
+        // Calculate offline progress (simple calculation)
+        const now = Date.now();
+        const lastLogin = data.lastLogin || now;
+        const timeElapsedSeconds = Math.floor((now - lastLogin) / 1000);
+
+        if (timeElapsedSeconds > 60 && clicksPerSecond > 0) { // Only calculate if away for over a minute
+            const offlineGains = timeElapsedSeconds * clicksPerSecond;
+            score += offlineGains;
+            showDialog(`Вы заработали ${formatNumber(offlineGains)} UZS, пока вас не было!`);
+            console.log(`Offline progress calculated: +${offlineGains} over ${timeElapsedSeconds}s`);
         }
+
+        lastSaveTimestamp = now;
+
+        updateGameMetrics();
+        renderUpgrades();
     }
     
-    /**
-     * Форматирует число с разделителями (для больших чисел).
-     */
-    function formatNumber(num) {
-        if (num === null || num === undefined) return '0';
-        return num.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
-    }
-
-    /**
-     * Обрабатывает ручной клик.
-     */
-    function handleManualClick() {
-        if (!isGameReady) {
-            showModal("Ошибка", "Игра еще не готова. Дождитесь загрузки данных.");
-            console.log("[CLICKER] Попытка клика до готовности игры.");
-            return;
-        }
-
-        const amount = 1;
-        gameData.score += amount;
-        updateUI(); // Обновляем UI немедленно для ощущения отклика
-        updateScoreInFirestore(amount, 0).catch(e => console.error("[FIREBASE] Ошибка сохранения клика:", e));
-        
-        // Визуальный эффект
-        scoreDisplay.classList.add('scale-110');
-        setTimeout(() => scoreDisplay.classList.remove('scale-110'), 50);
-    }
-    
-    /**
-     * Обрабатывает покупку менеджера.
-     */
-    async function buyManager(managerId) {
-        if (!isGameReady) {
-            showModal("Ошибка", "Игра еще не готова. Дождитесь загрузки данных.");
+    // Save state using a transaction to avoid race conditions
+    async function saveGameState() {
+        if (!db || !userId || !isConnected) {
+            saveStateLocally();
             return;
         }
         
-        const id = managerId.toString();
-        const config = MANAGER_CONFIG[id];
-        const cost = config.baseCost; // Стоимость пока статична
-        
-        console.log(`[CLICKER] Попытка покупки ${config.name}. Текущий счет: ${gameData.score}, Цена: ${cost}`);
-
-        if (gameData.score < cost) {
-            showModal("Недостаточно BSS", `Для покупки "${config.name}" требуется ${formatNumber(cost)} BSS.`);
-            return;
-        }
-
-        const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
+        const docRef = doc(db, getFirestorePath(false));
 
         try {
             await runTransaction(db, async (transaction) => {
-                const docSnapshot = await transaction.get(gameDocRef);
-                if (!docSnapshot.exists()) {
-                    throw "Документ игрового состояния не существует!";
-                }
-
-                const currentData = docSnapshot.data();
-                const currentScore = currentData.score || 0;
-                const currentManagers = currentData.managers || { 1: 0, 2: 0 };
-
-                // Проверяем счет еще раз на уровне базы данных
-                if ((currentData.score || 0) < cost) {
-                    throw "Недостаточно средств (Транзакция отменена).";
-                }
-
-                // Обновляем данные
-                const newScore = (currentData.score || 0) - cost;
-                const newDps = (currentData.dps || 0) + config.baseDps;
-                const currentManagerCount = currentManagers[id] || 0;
-                const newManagers = { ...currentManagers, [id]: currentManagerCount + 1 };
+                const docSnapshot = await transaction.get(docRef);
                 
-                // Записываем обновленные данные
-                transaction.set(gameDocRef, {
-                    score: newScore,
-                    dps: newDps,
-                    managers: newManagers,
-                    lastUpdate: serverTimestamp()
-                }, { merge: true });
-                
-                console.log(`[CLICKER] Транзакция покупки ${config.name} завершена.`);
-                showModal("Покупка совершена!", `Вы успешно наняли "${config.name}". Ваш ДВС увеличен на ${config.baseDps}.`, false);
+                const dataToSave = {
+                    score: Math.round(score),
+                    clickValue: clickValue,
+                    upgrades: userUpgrades,
+                    clicksPerSecond: clicksPerSecond,
+                    lastLogin: Date.now(),
+                    userId: userId,
+                };
+
+                if (docSnapshot.exists()) {
+                    transaction.update(docRef, dataToSave);
+                } else {
+                    transaction.set(docRef, dataToSave);
+                }
             });
+            lastSaveTimestamp = Date.now();
         } catch (e) {
-            console.error("[FIREBASE] Ошибка транзакции покупки:", e);
-            const errorMessage = (typeof e === 'string') ? e : (e.message || 'Неизвестная ошибка.');
-            if (errorMessage.includes("Недостаточно средств")) {
-                showModal("Ошибка", "Недостаточно средств. Попробуйте кликнуть еще.");
-            } else {
-                showModal("Ошибка сохранения", `Не удалось купить: ${errorMessage}`);
-            }
+            console.error("Transaction failed: ", e);
+            // If save fails, we don't switch to local mode, 
+            // but the game continues trying to save in the background.
         }
     }
 
-    /**
-     * Сохраняет изменения счета и DPS в Firestore (используется для кликов и DPS).
-     */
-    async function updateScoreInFirestore(scoreChange, dpsChange) {
-        if (!db || !userId) return;
+    // =========================================================================
+    // 4. GAME LOGIC
+    // =========================================================================
 
-        const gameDocRef = doc(db, `artifacts/${appId}/users/${userId}/gameData`, 'clickerState');
+    function updateGameMetrics() {
+        // 1. Reset metrics
+        clickValue = 1;
+        clicksPerSecond = 0;
 
-        try {
-            // Используем setDoc с merge: true, чтобы обновить данные
-            await setDoc(gameDocRef, {
-                score: gameData.score, // Мы уже обновили gameData локально
-                dps: gameData.dps,
-                managers: gameData.managers,
-                lastUpdate: serverTimestamp()
-            }, { merge: true });
-        } catch (e) {
-            console.error("[FIREBASE] Ошибка сохранения данных:", e);
-        }
-    }
-
-    /**
-     * Главный цикл игры для автоматического дохода (DPS).
-     */
-    function gameLoop() {
-        if (isGameReady && gameData.dps > 0) {
-            // Добавляем доход за 1 секунду
-            const income = gameData.dps;
-            gameData.score += income;
-            updateUI(); // Обновляем UI немедленно
+        // 2. Calculate new metrics based on upgrades
+        UPGRADES.forEach(u => {
+            const up = userUpgrades[u.id];
             
-            // Сохраняем данные в Firestore
-            updateScoreInFirestore(income, 0).catch(e => console.error("[FIREBASE] Ошибка сохранения DPS:", e));
-        }
-        // Запускаем цикл снова через 1 секунду
-        setTimeout(gameLoop, 1000); 
+            if (u.id === 'click-power') {
+                // Initial click power is 1, so add the value * level
+                clickValue = 1 + up.level * up.value;
+            } else if (u.id === 'auto-click') {
+                // Auto click is direct TPS increase
+                clicksPerSecond += up.level * up.value;
+            } else if (u.id === 'speed-boost') {
+                // Speed boost scales the overall TPS (simplified to direct addition here)
+                clicksPerSecond += up.level * up.value * 5; // Assuming speed boost is more powerful
+            }
+        });
+
+        scoreDisplay.textContent = formatNumber(score);
+        tpsDisplay.textContent = `Кликов в секунду: +${formatNumber(clicksPerSecond)}`;
+        renderUpgrades(); // Re-render to show updated prices/states
     }
 
-    // Инициализация при загрузке
+    function calculateNextPrice(upgradeId, currentLevel) {
+        const config = UPGRADES.find(u => u.id === upgradeId);
+        if (!config) return Infinity;
+        
+        // Exponential price increase
+        return config.basePrice * Math.pow(config.multiplier, currentLevel);
+    }
+
+    function handleClick(event) {
+        score += clickValue;
+        scoreDisplay.textContent = formatNumber(score);
+        
+        // Visual click effect
+        const rect = clickableArea.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        // Pulse effect on the main element
+        clickableArea.classList.remove('pulse-effect');
+        void clickableArea.offsetWidth; // Trigger reflow
+        clickableArea.classList.add('pulse-effect');
+
+        // Floating number animation
+        const clickText = document.createElement('div');
+        clickText.textContent = `+${clickValue}`;
+        clickText.className = 'click-animation';
+        clickText.style.left = `${x}px`;
+        clickText.style.top = `${y}px`;
+        clickableArea.appendChild(clickText);
+
+        setTimeout(() => {
+            clickableArea.removeChild(clickText);
+        }, 800);
+    }
+    
+    function buyUpgrade(upgradeId) {
+        const upgrade = userUpgrades[upgradeId];
+        const config = UPGRADES.find(u => u.id === upgradeId);
+        
+        if (score >= upgrade.price) {
+            score -= upgrade.price;
+            upgrade.level += 1;
+            
+            // Recalculate the next price
+            upgrade.price = calculateNextPrice(upgradeId, upgrade.level);
+            
+            // Recalculate the value (simplified)
+            if (config.type === 'click') {
+                upgrade.value = 1; // Simplistic: base value remains 1 per level
+            } else if (config.type === 'auto') {
+                upgrade.value = 1; // Simplistic: base TPS remains 1 per level
+            }
+
+            updateGameMetrics();
+            saveGameState();
+        } else {
+            showDialog(`Недостаточно средств! Нужно ${formatNumber(upgrade.price)} UZS.`);
+        }
+    }
+
+    // =========================================================================
+    // 5. RENDERING
+    // =========================================================================
+
+    function renderUpgrades() {
+        upgradesList.innerHTML = '';
+        UPGRADES.forEach(config => {
+            const upgrade = userUpgrades[config.id];
+            
+            // Determine the actual bonus value
+            let bonusText = '';
+            if (config.type === 'click') {
+                bonusText = `+${formatNumber(upgrade.value)} UZS за клик`;
+            } else if (config.type === 'auto') {
+                bonusText = `+${formatNumber(upgrade.value)} TPS`;
+            }
+
+            const canAfford = score >= upgrade.price;
+            const buttonClasses = canAfford 
+                ? 'bg-indigo-600 hover:bg-indigo-700' 
+                : 'bg-gray-500 cursor-not-allowed opacity-50';
+
+            const upgradeHtml = `
+                <div class="flex items-center justify-between bg-gray-700 p-4 rounded-xl shadow-md">
+                    <div>
+                        <p class="text-lg font-semibold text-white">${config.name} (Ур. ${upgrade.level})</p>
+                        <p class="text-sm text-gray-400">${bonusText}</p>
+                    </div>
+                    <button id="buy-${config.id}" class="buy-button ${buttonClasses} text-white font-bold py-2 px-4 rounded-lg transition duration-200"
+                        data-id="${config.id}">
+                        Купить: ${formatNumber(upgrade.price)} UZS
+                    </button>
+                </div>
+            `;
+            upgradesList.insertAdjacentHTML('beforeend', upgradeHtml);
+        });
+
+        // Attach event listeners to newly rendered buttons
+        document.querySelectorAll('.buy-button').forEach(button => {
+            const upgradeId = button.getAttribute('data-id');
+            button.onclick = () => buyUpgrade(upgradeId);
+        });
+    }
+
+    // =========================================================================
+    // 6. MAIN LOOP AND INITIALIZATION
+    // =========================================================================
+
+    let gameLoopInterval = null;
+    
+    function startGameLoop() {
+        if (gameLoopInterval) return; // Prevent multiple intervals
+
+        gameLoopInterval = setInterval(() => {
+            // Apply Auto-Click
+            score += clicksPerSecond;
+            scoreDisplay.textContent = formatNumber(score);
+            
+            // Auto Save to Firestore (every 5 seconds)
+            if (isConnected && Date.now() - lastSaveTimestamp > 5000) {
+                saveGameState();
+            } else if (!isConnected) {
+                // Save locally if in local mode
+                saveStateLocally();
+            }
+
+            // Update UI elements that depend on score (e.g., button colors)
+            renderUpgrades();
+
+        }, 1000); // Run every second
+    }
+
+    // Attach click listener
+    clickableArea.addEventListener('click', handleClick);
+
+    // Start initialization when window loads
     window.onload = function() {
-        initFirebase();
-        gameLoop(); // Запускаем цикл DPS
+        // Initial setup of the game state before any loading happens
+        updateGameMetrics(); 
+        
+        // Start Firebase/Auth setup
+        initFirebaseAndAuth(); 
+        
+        // Fallback for extreme cases where initFirebaseAndAuth fails but we need a game loop
+        if (!isConnected) {
+            startGameLoop();
+        }
     };
 </script>
 
