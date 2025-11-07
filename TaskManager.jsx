@@ -1,142 +1,200 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Trash2, Edit2, CheckCircle, Circle, Plus, AlertTriangle, Loader, RefreshCw } from 'lucide-react';
+import { Plus, Check, Trash2, Edit, X } from 'lucide-react';
 
-// --- КОНФИГУРАЦИЯ API ---
-// Предполагаем, что API запущен на том же хосте, но на порту 8000
-const API_BASE_URL = window.location.origin.replace('3000', '8000') || 'http://localhost:8000';
+// URL вашего развернутого бэкенда FastAPI
+const API_BASE_URL = 'https://tashboss.onrender.com';
 
 /**
- * Вспомогательная функция для выполнения запросов к API.
- * @param {string} endpoint - Конечная точка API.
- * @param {string} method - HTTP-метод (GET, POST, PUT, DELETE).
- * @param {object} [data=null] - Тело запроса.
- * @returns {Promise<any>} Ответ API.
+ * Хук для выполнения fetch-запросов
+ * @param {string} url - Относительный путь к эндпоинту
+ * @param {string} method - Метод HTTP
+ * @param {Object} body - Тело запроса (для POST/PUT)
+ * @returns {Promise<Object>}
  */
-async function apiFetch(endpoint, method = 'GET', data = null) {
-  const url = `${API_BASE_URL}${endpoint}`;
-  const headers = {
-    'Content-Type': 'application/json',
-  };
+const useApiRequest = () => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const config = {
-    method,
-    headers,
-    ...(data && { body: JSON.stringify(data) }),
-  };
+  const request = useCallback(async (url, method = 'GET', body = null) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const options = {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      };
 
-  try {
-    const response = await fetch(url, config);
+      if (body) {
+        options.body = JSON.stringify(body);
+      }
 
-    if (method === 'DELETE' && response.status === 204) {
-      return null;
+      const response = await fetch(`${API_BASE_URL}${url}`, options);
+      
+      if (response.status === 204) {
+          return null; // Для DELETE
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || `API error: ${response.status}`);
+      }
+
+      return data;
+    } catch (err) {
+      console.error('API Request Failed:', err);
+      setError(err.message || 'Произошла неизвестная ошибка сети.');
+      throw err;
+    } finally {
+      setLoading(false);
     }
+  }, []);
 
-    const jsonResponse = await response.json();
+  return { request, loading, error, clearError: () => setError(null) };
+};
 
-    if (!response.ok) {
-      const errorDetail = jsonResponse.detail || 'Неизвестная ошибка API';
-      throw new Error(`Ошибка ${response.status}: ${errorDetail}`);
-    }
+// --- Компонент UI элементов ---
 
-    return jsonResponse;
-  } catch (error) {
-    console.error('API Fetch Error:', error);
-    throw error;
-  }
-}
+const Button = ({ children, onClick, className = '', disabled = false, icon: Icon, type = 'button' }) => (
+  <button
+    type={type}
+    onClick={onClick}
+    disabled={disabled}
+    className={`flex items-center justify-center p-2 rounded-lg transition-all duration-200 shadow-md 
+                ${disabled ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'hover:shadow-lg active:scale-[0.98]'}
+                ${className}`}
+  >
+    {Icon && <Icon className="w-5 h-5 mr-1" />}
+    {children}
+  </button>
+);
 
-// --- Компонент одного элемента задачи ---
+const LoadingSpinner = () => (
+  <div className="flex justify-center items-center p-4">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+    <span className="ml-3 text-indigo-600">Загрузка...</span>
+  </div>
+);
 
-const TaskItem = ({ task, onUpdate, onDelete }) => {
+const ErrorMessage = ({ message, onDismiss }) => (
+  <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg shadow-md mb-4 flex justify-between items-center">
+    <p>{message}</p>
+    <button onClick={onDismiss} className="text-red-500 hover:text-red-800">
+      <X className="w-5 h-5" />
+    </button>
+  </div>
+);
+
+
+// --- Компонент одной Задачи ---
+
+const TaskItem = ({ task, onUpdate, onDelete, isUpdating }) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [newTitle, setNewTitle] = useState(task.title);
-  const [newDescription, setNewDescription] = useState(task.description || '');
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description || '');
 
-  const toggleDone = useCallback(() => {
-    onUpdate(task.id, { is_done: !task.is_done });
-  }, [task.id, task.is_done, onUpdate]);
-
-  const handleEditSubmit = useCallback(() => {
-    if (newTitle.trim() === '') return;
-    onUpdate(task.id, { title: newTitle.trim(), description: newDescription.trim() });
+  const handleSave = () => {
+    if (title.trim() === '') return;
+    onUpdate(task.id, { title, description, is_done: task.is_done });
     setIsEditing(false);
-  }, [task.id, newTitle, newDescription, onUpdate]);
+  };
 
-  const formatDate = (timestamp) => {
-    if (!timestamp) return '—';
-    return new Date(timestamp * 1000).toLocaleString('ru-RU', {
-      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+  const toggleDone = () => {
+    onUpdate(task.id, { is_done: !task.is_done });
   };
 
   return (
-    <div className={`
-      flex flex-col p-4 mb-3 rounded-xl shadow-lg transition-all duration-300
-      ${task.is_done ? 'bg-gray-100 border-l-8 border-green-500' : 'bg-white border-l-8 border-indigo-500 hover:shadow-xl'}
-    `}>
+    <div className={`p-4 mb-3 rounded-xl shadow-lg transition-all duration-300
+                    ${task.is_done ? 'bg-gray-100 border-l-8 border-green-500' : 'bg-white border-l-8 border-indigo-400'}
+                    ${isUpdating ? 'opacity-50' : ''}`}
+    >
       {isEditing ? (
-        <div className="flex flex-col gap-2">
+        // Режим редактирования
+        <div className="flex flex-col space-y-3">
           <input
-            className="text-xl font-semibold p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleEditSubmit()}
-            autoFocus
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="p-2 border border-indigo-300 rounded-lg text-lg font-semibold focus:ring-indigo-500 focus:border-indigo-500"
+            placeholder="Заголовок"
+            disabled={isUpdating}
           />
           <textarea
-            className="text-gray-600 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            rows="2"
-            value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="p-2 border border-indigo-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+            placeholder="Описание (необязательно)"
+            rows="3"
+            disabled={isUpdating}
           />
-          <button
-            onClick={handleEditSubmit}
-            className="mt-2 py-2 px-4 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition-colors"
-          >
-            Сохранить
-          </button>
+          <div className="flex space-x-2 justify-end">
+            <Button 
+                onClick={() => setIsEditing(false)} 
+                className="bg-gray-500 text-white hover:bg-gray-600"
+                disabled={isUpdating}
+                icon={X}
+            >
+              Отмена
+            </Button>
+            <Button 
+                onClick={handleSave} 
+                className="bg-green-500 text-white hover:bg-green-600"
+                disabled={isUpdating || title.trim() === ''}
+                icon={Check}
+            >
+              Сохранить
+            </Button>
+          </div>
         </div>
       ) : (
-        <div className="flex flex-col">
-          {/* Main Content & Toggle */}
-          <div className="flex items-start justify-between">
-            <div className="flex-1 cursor-pointer" onClick={toggleDone}>
-              <h3 className={`text-xl font-bold ${task.is_done ? 'line-through text-gray-500' : 'text-gray-900'}`}>
-                <span className="inline-block mr-3">
-                  {task.is_done ? <CheckCircle className="text-green-500 inline h-5 w-5" /> : <Circle className="text-indigo-400 inline h-5 w-5" />}
-                </span>
-                {task.title}
-              </h3>
-              {(task.description || '').trim().length > 0 && (
-                <p className={`text-sm mt-1 ml-8 ${task.is_done ? 'text-gray-400' : 'text-gray-600'}`}>{task.description}</p>
-              )}
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex-shrink-0 flex space-x-2 ml-4">
-              <button
-                onClick={() => setIsEditing(true)}
-                className="p-2 text-indigo-600 hover:text-indigo-800 transition-colors rounded-full hover:bg-indigo-100"
-                title="Редактировать"
-              >
-                <Edit2 className="h-5 w-5" />
-              </button>
-              <button
-                onClick={() => onDelete(task.id)}
-                className="p-2 text-red-600 hover:text-red-800 transition-colors rounded-full hover:bg-red-100"
-                title="Удалить"
-              >
-                <Trash2 className="h-5 w-5" />
-              </button>
-            </div>
+        // Режим просмотра
+        <div className="flex items-start justify-between">
+          <div 
+            className="flex-1 cursor-pointer" 
+            onClick={toggleDone}
+          >
+            <h3 className={`text-lg font-semibold ${task.is_done ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+              {task.title}
+            </h3>
+            {task.description && (
+              <p className={`text-sm mt-1 text-gray-600 ${task.is_done ? 'line-through text-gray-400' : ''}`}>
+                {task.description}
+              </p>
+            )}
           </div>
           
-          {/* Metadata */}
-          <div className="flex justify-end text-xs text-gray-500 mt-2 border-t pt-2">
-            <p>Создано: {formatDate(task.created_at)}</p>
-            {task.updated_at && task.updated_at !== task.created_at && (
-              <p className="ml-4">Обновлено: {formatDate(task.updated_at)}</p>
-            )}
+          <div className="flex space-x-2 ml-4 flex-shrink-0">
+            {/* Кнопка выполнения/отмены */}
+            <Button 
+              onClick={toggleDone} 
+              className={task.is_done ? 'bg-yellow-500 text-white hover:bg-yellow-600' : 'bg-green-500 text-white hover:bg-green-600'}
+              disabled={isUpdating}
+              icon={Check}
+            >
+              {task.is_done ? 'Отменить' : 'Готово'}
+            </Button>
+            
+            {/* Кнопка редактирования */}
+            <Button 
+              onClick={() => setIsEditing(true)} 
+              className="bg-indigo-500 text-white hover:bg-indigo-600"
+              disabled={isUpdating}
+              icon={Edit}
+            >
+              Изменить
+            </Button>
+            
+            {/* Кнопка удаления */}
+            <Button 
+              onClick={() => onDelete(task.id)} 
+              className="bg-red-500 text-white hover:bg-red-600"
+              disabled={isUpdating}
+              icon={Trash2}
+            >
+              Удалить
+            </Button>
           </div>
         </div>
       )}
@@ -144,246 +202,237 @@ const TaskItem = ({ task, onUpdate, onDelete }) => {
   );
 };
 
-// --- Компонент формы добавления задачи ---
 
-const TaskForm = ({ onTaskCreated }) => {
+// --- Компонент добавления новой Задачи ---
+
+const AddTaskForm = ({ onAddTask, isAdding }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (title.trim() === '') return;
 
-    setIsSubmitting(true);
-    const newTask = { title: title.trim(), description: description.trim() };
+    onAddTask({
+      title: title.trim(),
+      description: description.trim(),
+    });
 
-    try {
-      const createdTask = await apiFetch('/tasks', 'POST', newTask);
-      onTaskCreated(createdTask);
-      setTitle('');
-      setDescription('');
-    } catch (error) {
-      // Заменил alert на более безопасный вывод в консоль для Canvas
-      console.error(`Не удалось создать задачу: ${error.message}`);
-    } finally {
-      setIsSubmitting(false);
-    }
+    // Очистка полей
+    setTitle('');
+    setDescription('');
   };
 
   return (
-    <form onSubmit={handleSubmit} className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl shadow-inner mb-6">
-      <h2 className="text-2xl font-bold text-indigo-700 mb-4">Добавить новую задачу</h2>
-      <div className="mb-3">
+    <div className="p-6 bg-white rounded-xl shadow-2xl mb-6">
+      <h2 className="text-xl font-bold text-indigo-700 mb-4">Добавить новую задачу</h2>
+      <form onSubmit={handleSubmit} className="space-y-3">
         <input
           type="text"
-          placeholder="Заголовок задачи (обязательно)"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="w-full p-3 border-2 border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-gray-800"
-          required
+          placeholder="Заголовок задачи (обязательно)"
+          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition-shadow"
+          disabled={isAdding}
         />
-      </div>
-      <div className="mb-4">
         <textarea
-          placeholder="Описание задачи (необязательно)"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          rows="3"
-          className="w-full p-3 border-2 border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-500 text-gray-800 resize-none"
+          placeholder="Описание задачи (необязательно)"
+          rows="2"
+          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 resize-none transition-shadow"
+          disabled={isAdding}
         />
-      </div>
-      <button
-        type="submit"
-        disabled={!title.trim() || isSubmitting}
-        className={`w-full py-3 px-4 text-white font-bold rounded-lg transition-colors flex items-center justify-center
-          ${(!title.trim() || isSubmitting) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-md hover:shadow-lg'}`}
-      >
-        {isSubmitting ? (
-          <>
-            <Loader className="animate-spin mr-2 h-5 w-5" /> Добавление...
-          </>
-        ) : (
-          <>
-            <Plus className="h-5 w-5 mr-2" /> Добавить задачу
-          </>
-        )}
-      </button>
-    </form>
+        <Button 
+          type="submit" 
+          disabled={isAdding || title.trim() === ''}
+          className="w-full bg-indigo-600 text-white hover:bg-indigo-700"
+          icon={Plus}
+        >
+          {isAdding ? 'Добавление...' : 'Добавить Задачу'}
+        </Button>
+      </form>
+    </div>
   );
 };
 
-// --- Главный компонент приложения ---
+
+// --- Главный компонент Приложения ---
 
 const App = () => {
   const [tasks, setTasks] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [isApiHealthy, setIsApiHealthy] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [pendingTasks, setPendingTasks] = useState(new Set()); // ID задач, которые в процессе обновления/удаления
 
-  // Проверка работоспособности API
-  const checkApiHealth = useCallback(async () => {
-    try {
-      await apiFetch('/', 'GET');
-      setIsApiHealthy(true);
-      setError(null); // Сбросить ошибку, если она была
-    } catch (e) {
-      setIsApiHealthy(false);
-      // Устанавливаем более мягкое сообщение об ошибке, если API недоступен
-      setError('Ошибка подключения к API. Проверьте ваш бэкенд.');
-      console.error('Health Check Failed:', e);
-    }
-  }, []);
+  const { request, loading, error, clearError } = useApiRequest();
 
-  // Получение задач
+  // 1. Получение всех задач при загрузке
   const fetchTasks = useCallback(async () => {
-    if (!isApiHealthy) {
-        setIsLoading(false);
+    try {
+      const data = await request('/tasks');
+      setTasks(data || []);
+    } catch (e) {
+      console.error('Failed to fetch tasks:', e);
+    } finally {
+      setInitialLoading(false);
+    }
+  }, [request]);
+
+  useEffect(() => {
+    fetchTasks();
+  }, [fetchTasks]);
+
+  // 2. Добавление новой задачи
+  const handleAddTask = async (newTaskData) => {
+    try {
+      // Добавляем временный ID для блокировки формы
+      const tempId = 'new-task-temp-' + Date.now(); 
+      setPendingTasks(prev => new Set(prev).add(tempId));
+
+      const createdTask = await request('/tasks', 'POST', newTaskData);
+      
+      // Обновляем список задач
+      setTasks(prevTasks => [createdTask, ...prevTasks]);
+    } catch (e) {
+      // Ошибка будет показана через ErrorMessage
+    } finally {
+      setPendingTasks(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(tempId);
+        return newSet;
+      });
+    }
+  };
+
+  // 3. Обновление существующей задачи
+  const handleUpdateTask = async (id, updates) => {
+    if (pendingTasks.has(id)) return;
+
+    try {
+      setPendingTasks(prev => new Set(prev).add(id));
+      const updatedTask = await request(`/tasks/${id}`, 'PUT', updates);
+      
+      // Обновляем задачу в списке
+      setTasks(prevTasks => 
+        prevTasks.map(task => (task.id === id ? updatedTask : task))
+      );
+    } catch (e) {
+      // Ошибка будет показана через ErrorMessage
+    } finally {
+      setPendingTasks(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+      });
+    }
+  };
+
+  // 4. Удаление задачи
+  const handleDeleteTask = async (id) => {
+    if (pendingTasks.has(id)) return;
+    
+    // Подтверждение перед удалением (заменяем window.confirm на простой console log)
+    if (!window.confirm('Вы уверены, что хотите удалить эту задачу?')) {
         return;
     }
 
-    setIsLoading(true);
-    setError(null);
     try {
-      const data = await apiFetch('/tasks');
-      setTasks(data);
+      setPendingTasks(prev => new Set(prev).add(id));
+      await request(`/tasks/${id}`, 'DELETE');
+      
+      // Удаляем задачу из списка
+      setTasks(prevTasks => prevTasks.filter(task => task.id !== id));
     } catch (e) {
-      // Если API здоров, но запрос к задачам падает (например, 500)
-      setError(`Ошибка при загрузке задач: ${e.message}`);
+      // Ошибка будет показана через ErrorMessage
     } finally {
-      setIsLoading(false);
-    }
-  }, [isApiHealthy]);
-
-  useEffect(() => {
-    checkApiHealth();
-  }, [checkApiHealth]);
-
-  useEffect(() => {
-    if (isApiHealthy) {
-      fetchTasks();
-    }
-  }, [isApiHealthy, fetchTasks]);
-
-  // Обработчик создания задачи (TaskForm вызывает его)
-  const handleTaskCreated = (newTask) => {
-    setTasks(prevTasks => [newTask, ...prevTasks]);
-  };
-
-  // Обработчик обновления задачи
-  const handleTaskUpdate = async (id, update) => {
-    try {
-      const updatedTask = await apiFetch(`/tasks/${id}`, 'PUT', update);
-      setTasks(prevTasks => prevTasks.map(t => t.id === id ? updatedTask : t));
-    } catch (error) {
-      console.error(`Не удалось обновить задачу: ${error.message}`);
+      setPendingTasks(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+      });
     }
   };
-
-  // Обработчик удаления задачи
-  const handleTaskDelete = async (id) => {
-    // Используем window.confirm напрямую для простоты
-    if (!confirm("Вы уверены, что хотите удалить эту задачу?")) {
-      return;
-    }
-    try {
-      await apiFetch(`/tasks/${id}`, 'DELETE');
-      setTasks(prevTasks => prevTasks.filter(t => t.id !== id));
-    } catch (error) {
-      console.error(`Не удалось удалить задачу: ${error.message}`);
-    }
-  };
-
-  const tasksDone = tasks.filter(t => t.is_done);
-  const tasksPending = tasks.filter(t => !t.is_done);
-
-  // --- Рендеринг ---
+  
+  // Разделение задач на активные и завершенные
+  const activeTasks = tasks.filter(task => !task.is_done);
+  const completedTasks = tasks.filter(task => task.is_done);
+  
+  const isAdding = pendingTasks.has(tasks.find(t => t.id && t.id.startsWith('new-task-temp'))?.id);
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-8 font-sans">
       <script src="https://cdn.tailwindcss.com"></script>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
       `}</style>
-      
+
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-extrabold text-gray-800 mb-6 border-b-4 border-indigo-500 pb-2">
-          Менеджер Задач
-        </h1>
-
-        {/* Секция API Health */}
-        <div className={`p-4 rounded-xl mb-6 shadow-md flex items-center justify-between
-          ${isApiHealthy ? 'bg-green-100 border-l-4 border-green-500' : 'bg-red-100 border-l-4 border-red-500'}`}
-        >
-          <div className="flex items-center">
-            {isApiHealthy ? (
-              <CheckCircle className="text-green-600 mr-3 h-6 w-6" />
-            ) : (
-              <AlertTriangle className="text-red-600 mr-3 h-6 w-6" />
-            )}
-            <p className="text-gray-800 font-medium">
-              Статус API: {isApiHealthy ? 'Активен и готов к работе' : 'Недоступен'}
-            </p>
-          </div>
-          <button
-            onClick={() => { checkApiHealth(); fetchTasks(); }}
-            className="p-2 bg-white rounded-full text-indigo-600 hover:bg-indigo-50 transition-colors"
-            title="Повторить проверку"
-            disabled={isLoading}
-          >
-            <RefreshCw className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-
-        {/* Форма добавления задачи */}
-        <TaskForm onTaskCreated={handleTaskCreated} />
-
-        {/* Отображение ошибок */}
-        {error && (
-          <div className="p-4 bg-yellow-100 text-yellow-800 rounded-lg flex items-center mb-6">
-            <AlertTriangle className="h-5 w-5 mr-3" />
-            {error}
-          </div>
-        )}
-
-        {/* Список задач */}
-        <h2 className="text-3xl font-bold text-gray-800 mb-4">
-          Текущие Задачи ({tasksPending.length})
-        </h2>
-        {isLoading && isApiHealthy ? (
-          <div className="flex items-center justify-center p-10 bg-white rounded-xl shadow-lg">
-            <Loader className="animate-spin h-8 w-8 text-indigo-600 mr-3" />
-            <p className="text-lg text-indigo-600">Загрузка задач...</p>
-          </div>
-        ) : tasksPending.length > 0 ? (
-          tasksPending.map(task => (
-            <TaskItem 
-              key={task.id} 
-              task={task} 
-              onUpdate={handleTaskUpdate} 
-              onDelete={handleTaskDelete} 
-            />
-          ))
-        ) : 
-          !error && <p className="p-4 text-center bg-white rounded-xl shadow-md text-gray-500">Пока нет активных задач. Отлично!</p>
-        }
-
-        {tasksDone.length > 0 && (
-          <h2 className="text-3xl font-bold text-gray-800 mt-8 mb-4 border-t pt-6">
-            Завершенные Задачи ({tasksDone.length})
-          </h2>
-        )}
+        <header className="text-center py-6 mb-6 bg-white rounded-xl shadow-lg">
+          <h1 className="text-4xl font-extrabold text-indigo-700">
+            Task Manager
+          </h1>
+          <p className="text-gray-500 mt-2">
+            FastAPI (Python) + Firestore + React
+          </p>
+        </header>
         
-        {tasksDone.map(task => (
-          <TaskItem 
-            key={task.id} 
-            task={task} 
-            onUpdate={handleTaskUpdate} 
-            onDelete={handleTaskDelete} 
-          />
-        ))}
+        {error && <ErrorMessage message={`Ошибка API: ${error}`} onDismiss={clearError} />}
+        
+        {/* Форма добавления */}
+        <AddTaskForm onAddTask={handleAddTask} isAdding={isAdding} />
 
+        {/* Индикатор загрузки при первом запуске */}
+        {initialLoading && <LoadingSpinner />}
+        
+        {/* Основной список задач */}
+        <div className="space-y-6">
+          {/* Активные задачи */}
+          <div className="bg-white p-6 rounded-xl shadow-2xl">
+            <h2 className="text-2xl font-bold text-indigo-700 mb-4 flex items-center">
+              Активные Задачи ({activeTasks.length})
+            </h2>
+            {activeTasks.length === 0 && !initialLoading && (
+              <p className="text-gray-500 italic">Нет активных задач. Время создать что-то новое!</p>
+            )}
+            <div className="space-y-3">
+              {activeTasks.map(task => (
+                <TaskItem
+                  key={task.id}
+                  task={task}
+                  onUpdate={handleUpdateTask}
+                  onDelete={handleDeleteTask}
+                  isUpdating={pendingTasks.has(task.id)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Завершенные задачи */}
+          <div className="bg-white p-6 rounded-xl shadow-2xl opacity-70">
+            <h2 className="text-2xl font-bold text-green-700 mb-4">
+              Завершенные ({completedTasks.length})
+            </h2>
+            <div className="space-y-3">
+              {completedTasks.map(task => (
+                <TaskItem
+                  key={task.id}
+                  task={task}
+                  onUpdate={handleUpdateTask}
+                  onDelete={handleDeleteTask}
+                  isUpdating={pendingTasks.has(task.id)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+        
+        {/* Индикатор общих операций */}
+        {loading && !initialLoading && (
+            <div className="fixed bottom-4 right-4 bg-indigo-600 text-white py-2 px-4 rounded-full shadow-xl">
+                Выполнение операции...
+            </div>
+        )}
       </div>
     </div>
   );
