@@ -63,11 +63,13 @@
 
 <div class="app-container">
     <!-- Header: Score and Production -->
+    <!-- ИНДИКАТОР ЗАГРУЗКИ: Должен быть видимым по умолчанию -->
     <div id="loading-indicator" class="text-center py-10">
         <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-tg-theme-text-color mx-auto"></div>
         <p class="mt-4 text-tg-theme-hint-color">Загрузка данных...</p>
     </div>
 
+    <!-- ОСНОВНОЕ СОДЕРЖАНИЕ: Скрыто по умолчанию -->
     <div id="main-content" class="hidden space-y-6">
         <div class="header-card p-4 rounded-xl shadow-lg">
             <h1 class="text-2xl font-extrabold mb-2 text-tg-theme-text-color">TashBoss 🏗️</h1>
@@ -130,6 +132,9 @@
 <script>
     // Constants and Global State
     const BASE_URL = window.location.origin; // Dynamically use the current host
+    // Глобальный таймаут для запросов к API (30 секунд, достаточно для "холодного старта" Render)
+    const API_TIMEOUT_MS = 30000; 
+
     let userId = null;
     let playerState = {};
     let masterData = [];
@@ -138,50 +143,82 @@
     // --- UTILITIES ---
 
     /**
+     * Helper function to safely get an element by ID.
+     * @param {string} id The element ID.
+     * @returns {HTMLElement | null}
+     */
+    function getEl(id) {
+        return document.getElementById(id);
+    }
+
+    /**
      * Shows a custom message box instead of alert.
      * @param {string} title 
      * @param {string} body 
      */
     function showMessage(title, body) {
-        document.getElementById('message-title').textContent = title;
-        document.getElementById('message-body').textContent = body;
-        document.getElementById('message-box').classList.remove('hidden');
-        document.getElementById('message-box').classList.add('flex');
+        const msgBox = getEl('message-box');
+        if (msgBox) {
+            getEl('message-title').textContent = title;
+            getEl('message-body').textContent = body;
+            msgBox.classList.remove('hidden');
+            msgBox.classList.add('flex');
+        } else {
+            console.error('Message box element not found!');
+        }
     }
 
     /**
-     * Handles API calls with exponential backoff.
+     * Handles API calls with exponential backoff and timeout.
      * @param {string} endpoint 
      * @param {string} method 
+     * @param {Object} body 
      * @param {number} retries 
      * @returns {Promise<Object>}
      */
     async function fetchWithRetry(endpoint, method = 'GET', body = null, retries = 3) {
-        const url = `${BASE_URL}${endpoint}`;
-        const options = {
-            method: method,
-            headers: {
-                'Content-Type': 'application/json',
-                // Add Authorization header if needed, but for Mini App we use user_id in path
-            }
-        };
-
-        if (body) {
-            options.body = JSON.stringify(body);
+        // Убедимся, что BASE_URL использует HTTPS, если мы находимся на Render
+        let url = `${BASE_URL}${endpoint}`;
+        if (url.startsWith('http://tashboss.onrender.com')) {
+            url = url.replace('http:', 'https:');
         }
 
         for (let i = 0; i < retries; i++) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
             try {
+                const options = {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    signal: controller.signal // Add the signal for timeout
+                };
+
+                if (body) {
+                    options.body = JSON.stringify(body);
+                }
+
                 const response = await fetch(url, options);
+                clearTimeout(timeoutId);
+
                 if (response.ok) {
                     return await response.json();
                 }
 
                 // If it's a 4xx or 5xx error, but not a network error, throw it for handling
-                const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                const errorData = await response.json().catch(() => ({ detail: 'Unknown error or non-JSON response' }));
                 throw new Error(errorData.detail || `HTTP Error: ${response.status} ${response.statusText}`);
 
             } catch (error) {
+                clearTimeout(timeoutId);
+
+                // Handle AbortError specifically (our timeout)
+                if (error.name === 'AbortError') {
+                    error.message = "Таймаут соединения. Сервер (Render) может быть в режиме сна. Повторите попытку.";
+                }
+
                 console.error(`Attempt ${i + 1} failed for ${url}:`, error);
                 if (i === retries - 1) {
                     throw error;
@@ -202,7 +239,6 @@
             clearInterval(accumulationLoopInterval);
         }
 
-        // Find the owned industries in master data and calculate total production/sec
         let totalProductionPerSecond = 0;
         
         playerState.industries.forEach(ownedInd => {
@@ -218,7 +254,8 @@
         playerState.totalProductionPerSecond = totalProductionPerSecond;
 
         // Display current production per cycle (as calculated by the backend)
-        document.getElementById('total-production').textContent = playerState.total_production;
+        const totalProductionEl = getEl('total-production');
+        if (totalProductionEl) totalProductionEl.textContent = playerState.total_production;
         
         let visualProfit = playerState.accumulated_profit || 0;
         let lastVisualUpdateTime = Date.now();
@@ -233,15 +270,19 @@
             }
 
             const profitInt = Math.floor(visualProfit);
-            document.getElementById('accumulated-profit-display').textContent = profitInt.toLocaleString('ru-RU');
+            const profitDisplayEl = getEl('accumulated-profit-display');
+            const collectBtn = getEl('collect-button');
             
-            const collectBtn = document.getElementById('collect-button');
-            if (profitInt > 0) {
-                collectBtn.disabled = false;
-                collectBtn.classList.add('pulse-animation');
-            } else {
-                collectBtn.disabled = true;
-                collectBtn.classList.remove('pulse-animation');
+            if (profitDisplayEl) profitDisplayEl.textContent = profitInt.toLocaleString('ru-RU');
+            
+            if (collectBtn) {
+                if (profitInt > 0) {
+                    collectBtn.disabled = false;
+                    collectBtn.classList.add('pulse-animation');
+                } else {
+                    collectBtn.disabled = true;
+                    collectBtn.classList.remove('pulse-animation');
+                }
             }
         }, 200); // Update every 200ms for smooth animation
     }
@@ -255,9 +296,11 @@
             return;
         }
 
-        const collectBtn = document.getElementById('collect-button');
-        collectBtn.disabled = true;
-        collectBtn.textContent = 'Сбор...';
+        const collectBtn = getEl('collect-button');
+        if (collectBtn) {
+            collectBtn.disabled = true;
+            collectBtn.textContent = 'Сбор...';
+        }
 
         try {
             const data = await fetchWithRetry(`/update/${userId}`, 'POST');
@@ -271,7 +314,7 @@
         } catch (error) {
             showMessage("Ошибка сбора", error.message);
         } finally {
-            collectBtn.textContent = 'Собрать';
+            if (collectBtn) collectBtn.textContent = 'Собрать';
         }
     }
 
@@ -291,9 +334,11 @@
             return;
         }
 
-        const btn = document.getElementById(`buy-btn-${industryFrontendId}`);
-        btn.disabled = true;
-        btn.textContent = 'Покупка...';
+        const btn = getEl(`buy-btn-${industryFrontendId}`);
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Покупка...';
+        }
 
         try {
             const data = await fetchWithRetry(`/buy/${userId}/${industryFrontendId}`, 'POST');
@@ -304,8 +349,10 @@
         } catch (error) {
             showMessage("Ошибка покупки", error.message);
         } finally {
-            btn.disabled = false;
-            btn.textContent = `Купить за ${industry.base_cost.toLocaleString('ru-RU')} BSS`;
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = `Купить за ${industry.base_cost.toLocaleString('ru-RU')} BSS`;
+            }
         }
     }
 
@@ -316,7 +363,8 @@
      * Renders the current player score and total production rate.
      */
     function renderHeader() {
-        document.getElementById('player-score').textContent = playerState.score.toLocaleString('ru-RU');
+        const playerScoreEl = getEl('player-score');
+        if (playerScoreEl) playerScoreEl.textContent = playerState.score.toLocaleString('ru-RU');
         // Total production is updated and displayed in startAccumulationLoop
     }
 
@@ -324,12 +372,14 @@
      * Renders the list of industries owned by the player.
      */
     function renderOwnedIndustries() {
-        const list = document.getElementById('owned-industries-list');
+        const list = getEl('owned-industries-list');
+        if (!list) return;
+
         list.innerHTML = ''; // Clear existing list
-        const noMsg = document.getElementById('no-industries-msg');
+        const noMsg = getEl('no-industries-msg');
 
         if (playerState.industries && playerState.industries.length > 0) {
-            noMsg.classList.add('hidden');
+            if (noMsg) noMsg.classList.add('hidden');
             playerState.industries.forEach(ownedInd => {
                 const masterInd = masterData.find(m => m.id === ownedInd.id);
                 if (masterInd) {
@@ -351,7 +401,7 @@
                 }
             });
         } else {
-            noMsg.classList.remove('hidden');
+            if (noMsg) noMsg.classList.remove('hidden');
         }
     }
 
@@ -359,7 +409,9 @@
      * Renders the list of available industries for purchase.
      */
     function renderAvailableIndustries() {
-        const list = document.getElementById('available-industries-list');
+        const list = getEl('available-industries-list');
+        if (!list) return;
+
         list.innerHTML = ''; // Clear existing list
 
         // Get IDs of industries already owned (for filtering)
@@ -408,8 +460,11 @@
     // --- INITIALIZATION ---
 
     async function initializeApp() {
-        document.getElementById('loading-indicator').classList.remove('hidden');
-        document.getElementById('main-content').classList.add('hidden');
+        const loadingIndicator = getEl('loading-indicator');
+        const mainContent = getEl('main-content');
+
+        if (loadingIndicator) loadingIndicator.classList.remove('hidden');
+        if (mainContent) mainContent.classList.add('hidden');
 
         // 1. Check Telegram WebApp init
         if (typeof Telegram === 'undefined' || !Telegram.WebApp.initDataUnsafe || !Telegram.WebApp.initDataUnsafe.user) {
@@ -430,7 +485,8 @@
             }
         }
         
-        document.getElementById('user-id-display').textContent = userId;
+        const userIdDisplay = getEl('user-id-display');
+        if (userIdDisplay) userIdDisplay.textContent = userId;
 
         // 2. Fetch data
         try {
@@ -443,9 +499,9 @@
             renderUI();
             startAccumulationLoop();
 
-            // 4. Show content
-            document.getElementById('loading-indicator').classList.add('hidden');
-            document.getElementById('main-content').classList.remove('hidden');
+            // 4. Show content (Safely hide/show)
+            if (loadingIndicator) loadingIndicator.classList.add('hidden');
+            if (mainContent) mainContent.classList.remove('hidden');
             
             // 5. Setup Telegram closing button (optional but good practice)
             Telegram.WebApp.ready();
@@ -455,7 +511,22 @@
 
         } catch (error) {
             console.error("Initialization failed:", error);
-            document.getElementById('loading-indicator').innerHTML = `<h1 class="text-red-500">Ошибка загрузки: ${error.message}</h1><p class="text-tg-theme-hint-color mt-2">Проверьте, что ваш API запущен и доступен.</p>`;
+            // Исправленная логика обработки ошибки
+            let errorMessage = error.message;
+            if (errorMessage.includes("Failed to fetch") || errorMessage.includes("Таймаут") || error.name === 'AbortError') {
+                errorMessage = `Сервер Render спит или недоступен. Пожалуйста, подождите 30 секунд и попробуйте перезапустить приложение. Ошибка: ${error.name || 'Network Error'}`;
+            }
+
+            if (loadingIndicator) {
+                loadingIndicator.innerHTML = `
+                    <h1 class="text-red-500 font-bold">Ошибка загрузки API</h1>
+                    <p class="text-tg-theme-hint-color mt-2 p-2 rounded-lg bg-red-500/10 text-sm">${errorMessage}</p>
+                    <button onclick="initializeApp()" class="btn-primary mt-4 px-4 py-2 rounded-lg">Повторить попытку</button>
+                `;
+            }
+            // Главное содержание остается скрытым, показывается только индикатор с ошибкой
+            if (mainContent) mainContent.classList.add('hidden');
+
         }
     }
 
