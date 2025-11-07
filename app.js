@@ -1,359 +1,274 @@
-// Глобальные переменные Firebase, как в HTML-файле
-let app;
-let db;
-let auth;
-let userId = null;
-let isAuthReady = false; // Флаг, указывающий, что аутентификация завершена
+import React, { useState, useEffect, useCallback } from 'react';
+import { Loader, Zap, Gift, RefreshCw, AlertTriangle, ChevronUp } from 'lucide-react';
 
-// Глобальные переменные игры
-let gameState = null;
-let passiveIncomeInterval = null;
-const API_BASE_URL = window.location.origin;
+// --- Константы и конфигурация API ---
+const BASE_API_URL = '/api'; // Базовый путь для запросов к FastAPI
+const MOCK_USER_ID = 'telegram_user_123456'; // Заглушка, заменить на реальный ID пользователя Telegram
+const UPGRADE_COST = 100;
 
-// --- Утилиты Firebase ---
+// --- Вспомогательная функция для API ---
 
-// Обработчик ошибки Firebase
-const handleAuthError = (message, error) => {
-    console.error(message, error);
-    const appContainer = document.getElementById('app-container');
-    appContainer.innerHTML = `
-        <div class="p-6 bg-blue-900 rounded-xl shadow-2xl max-w-sm mx-auto mt-20 text-center">
-            <h1 class="text-xl font-bold text-white mb-4">TashBoss Clicker</h1>
-            <p class="text-yellow-400">Ошибка: Не удалось войти в Firebase. Пожалуйста, проверьте консоль.</p>
-        </div>
-    `;
+/**
+ * Выполняет запрос к API с логикой экспоненциального отката для обработки ошибок.
+ * @param {string} endpoint - Конечная точка API.
+ * @param {string} method - HTTP-метод.
+ * @param {object} body - Тело запроса (для POST/PUT).
+ * @param {number} retries - Максимальное количество попыток.
+ */
+const apiFetchWithRetry = async (endpoint, method = 'GET', body = null, retries = 3) => {
+  const url = `${BASE_API_URL}${endpoint}`;
+  const options = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+
+  if (body) {
+    options.body = JSON.stringify(body);
+  }
+
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      
+      if (response.ok) {
+        // Если 204 No Content, возвращаем пустой объект
+        if (response.status === 204) return {};
+        return await response.json();
+      }
+      
+      // Обработка HTTP ошибок (например, 400, 404, 500)
+      const errorData = await response.json();
+      throw new Error(errorData.detail || `HTTP Error ${response.status}: ${response.statusText}`);
+
+    } catch (error) {
+      if (i === retries - 1) {
+        // Если это последняя попытка, пробрасываем ошибку
+        throw error;
+      }
+      // Экспоненциальный откат: 1, 2, 4 секунды
+      const delay = Math.pow(2, i) * 1000;
+      console.warn(`[API] Попытка ${i + 1} не удалась. Повтор через ${delay / 1000}с...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
 };
 
-// Функция для получения токена Firebase ID с бэкенда
-async function getFirebaseToken(initData) {
-    const url = `${API_BASE_URL}/api/get_firebase_token`;
+
+// --- Главный компонент игры ---
+
+const App = () => {
+  const [playerState, setPlayerState] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [tapAnimation, setTapAnimation] = useState(false);
+
+  // 1. Загрузка начального состояния игрока
+  const fetchPlayerState = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ init_data: initData }),
-        });
-
-        if (!response.ok) {
-            // Если Webhook API возвращает 404, это означает, что токен не получен
-            const errorData = await response.json();
-            throw new Error(`Ошибка HTTP: ${response.status}. Детали: ${errorData.detail || 'Неизвестно'}`);
-        }
-
-        const data = await response.json();
-        return data.firebase_token;
-    } catch (error) {
-        console.error("Ошибка при получении кастомного токена Firebase с бэкенда:", error);
-        throw new Error("Не удалось получить токен. Ошибка HTTP: 404. Not Found"); // Оставим эту ошибку для наглядности
+      const state = await apiFetchWithRetry(`/state/${MOCK_USER_ID}`);
+      setPlayerState(state);
+    } catch (e) {
+      console.error("Ошибка загрузки состояния игрока:", e.message);
+      setError(`Не удалось загрузить состояние игрока: ${e.message}`);
+    } finally {
+      setIsLoading(false);
     }
-}
+  }, []);
 
+  useEffect(() => {
+    fetchPlayerState();
+  }, [fetchPlayerState]);
 
-// Основная функция инициализации аутентификации
-async function initAuth() {
-    const firebaseConfigElement = document.getElementById('firebase-config');
-    const firebaseTokenElement = document.getElementById('initial-auth-token');
+  // 2. Обработка клика (Tap)
+  const handleTap = useCallback(async () => {
+    if (!playerState || isLoading) return;
 
-    if (!firebaseConfigElement) {
-        return handleAuthError("Элемент firebase-config не найден.", null);
-    }
-    const firebaseConfig = JSON.parse(firebaseConfigElement.textContent);
-    
-    // Инициализация Firebase
-    app = firebase.initializeApp(firebaseConfig);
-    auth = firebase.auth(app);
-    db = firebase.firestore(app);
-    
-    firebase.firestore.setLogLevel('debug'); // Для отладки
-    
-    // 1. Получение initData (ключевой момент для WebApp)
-    const urlParams = new URLSearchParams(window.location.search);
-    const initData = urlParams.get('tgWebAppData');
-    
-    let customToken = null;
-    
-    if (initData) {
-        // Если WebApp открыт Telegram, используем initData для получения токена
-        try {
-            customToken = await getFirebaseToken(initData);
-        } catch (error) {
-            handleAuthError("Ошибка: Не удалось получить токен. Ошибка HTTP: 404. Not Found", error);
-            isAuthReady = true;
-            return;
-        }
-    } else if (firebaseTokenElement) {
-        // Если открыто в Canvas (для тестирования), используем __initial_auth_token
-        customToken = firebaseTokenElement.textContent;
-    }
+    // Оптимистичное обновление UI
+    const currentScore = playerState.score;
+    const clicksPerTap = playerState.clicks_per_tap;
+    setPlayerState(prev => ({
+      ...prev,
+      score: currentScore + clicksPerTap
+    }));
 
-    // 2. Аутентификация
-    auth.onAuthStateChanged(async (user) => {
-        if (user) {
-            userId = user.uid;
-            isAuthReady = true;
-            await loadGameState();
-        } else if (customToken) {
-            // Если есть токен, но пользователь не вошел, пытаемся войти
-            try {
-                await auth.signInWithCustomToken(customToken);
-            } catch (error) {
-                handleAuthError("Ошибка при входе с кастомным токеном.", error);
-                isAuthReady = true;
-            }
-        } else {
-            // Если токена нет (и не Telegram), входим анонимно (только для Canvas)
-            try {
-                await auth.signInAnonymously();
-            } catch(error) {
-                handleAuthError("Ошибка анонимного входа.", error);
-                isAuthReady = true;
-            }
-        }
-    });
-}
+    // Анимация клика
+    setTapAnimation(true);
+    setTimeout(() => setTapAnimation(false), 200);
 
-// --- Утилиты API ---
-
-// ... (Функции fetchWithAuth, loadGameState, collectIncome, buySector остаются БЕЗ ИЗМЕНЕНИЙ)
-
-async function fetchWithAuth(endpoint, options = {}) {
-    if (!userId) {
-        throw new Error("Пользователь не авторизован.");
-    }
-    const token = await auth.currentUser.getIdToken();
-    const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-    };
-    
-    const url = `${API_BASE_URL}${endpoint}`;
-    
     try {
-        const response = await fetch(url, { ...options, headers });
-        if (response.status === 401) {
-             // 401: Токен устарел или недействителен.
-             await auth.signOut();
-             alert("Сессия истекла. Пожалуйста, перезагрузите приложение.");
-             throw new Error("Unauthorized");
-        }
-        if (!response.ok) {
-            let errorDetail = "Неизвестная ошибка";
-            try {
-                const errorJson = await response.json();
-                errorDetail = errorJson.detail || JSON.stringify(errorJson);
-            } catch {}
-            throw new Error(`Ошибка API: ${response.status} - ${errorDetail}`);
-        }
-        return response.json();
-    } catch (error) {
-        console.error(`Ошибка при обращении к ${endpoint}:`, error);
-        throw error;
+      // Запрос к бэкенду для сохранения
+      const response = await apiFetchWithRetry(`/tap/${MOCK_USER_ID}`, 'POST');
+      
+      // Обновление состояния на основе ответа бэкенда (для синхронизации)
+      setPlayerState(prev => ({
+        ...prev,
+        score: response.new_score,
+        clicks_per_tap: response.clicks_per_tap || clicksPerTap // На случай, если CPT не изменился
+      }));
+    } catch (e) {
+      console.error("Ошибка при клике:", e.message);
+      setError(`Ошибка сохранения клика: ${e.message}`);
+      // Откатываем оптимистичное обновление в случае ошибки
+      setPlayerState(prev => ({ ...prev, score: currentScore }));
     }
-}
+  }, [playerState, isLoading]);
 
-async function loadGameState() {
+
+  // 3. Обработка покупки улучшения
+  const handleUpgrade = useCallback(async () => {
+    if (!playerState || isLoading || playerState.score < UPGRADE_COST) return;
+
+    // Оптимистичное обновление UI
+    const currentScore = playerState.score;
+    const currentCPT = playerState.clicks_per_tap;
+    setPlayerState(prev => ({
+        ...prev,
+        score: currentScore - UPGRADE_COST,
+        clicks_per_tap: currentCPT + 1
+    }));
+    setError(null);
+
     try {
-        const data = await fetchWithAuth('/api/load_state', { method: 'POST' });
-        gameState = data;
-        renderGame();
-        // Настройка интервала пассивного дохода
-        if (passiveIncomeInterval) clearInterval(passiveIncomeInterval);
-        passiveIncomeInterval = setInterval(renderGame, 1000); // Обновляем рендер каждую секунду
-    } catch (error) {
-        console.error("Не удалось загрузить состояние игры:", error);
-        // Обработка ошибки загрузки: показать сообщение пользователю
-        renderError("Не удалось загрузить состояние игры. Попробуйте перезапустить приложение.");
+      const response = await apiFetchWithRetry(`/upgrade/${MOCK_USER_ID}`, 'POST');
+      // Обновление состояния на основе ответа бэкенда (для синхронизации)
+      setPlayerState(prev => ({
+        ...prev,
+        score: response.new_score,
+        clicks_per_tap: response.new_clicks_per_tap
+      }));
+    } catch (e) {
+      console.error("Ошибка при покупке улучшения:", e.message);
+      setError(`Ошибка улучшения: ${e.message}. Пожалуйста, обновите страницу.`);
+      // Откатываем оптимистичное обновление в случае ошибки
+      setPlayerState(prev => ({ 
+        ...prev, 
+        score: currentScore,
+        clicks_per_tap: currentCPT
+      }));
     }
-}
+  }, [playerState, isLoading]);
 
-async function collectIncome() {
-    try {
-        const data = await fetchWithAuth('/api/collect_income', { method: 'POST' });
-        gameState = data;
-        renderGame();
-        showNotification(`Собрано: ${gameState.collected_amount.toFixed(2)} BossCoin!`, 'success');
-    } catch (error) {
-        console.error("Не удалось собрать доход:", error);
-        showNotification("Ошибка сбора дохода. Попробуйте еще раз.", 'error');
-    }
-}
+  // --- Элементы UI ---
 
-async function buySector(sectorId) {
-    try {
-        const data = await fetchWithAuth('/api/buy_sector', {
-            method: 'POST',
-            body: JSON.stringify({ sector_id: sectorId })
-        });
-        gameState = data;
-        renderGame();
-        if (gameState.purchase_successful) {
-            showNotification(`Куплен ${sectorId} (Уровень ${gameState.sectors[sectorId] || 1})!`, 'success');
-        } else {
-            showNotification("Недостаточно BossCoin для покупки.", 'warning');
+  if (error) {
+    return (
+      <div className="p-8 max-w-lg mx-auto bg-red-100 border-l-4 border-red-500 rounded-lg shadow-xl mt-12">
+        <h2 className="text-2xl font-bold text-red-800 flex items-center mb-4">
+          <AlertTriangle className="h-6 w-6 mr-2" /> Критическая ошибка
+        </h2>
+        <p className="text-red-700 mb-4">{error}</p>
+        <button 
+          onClick={fetchPlayerState}
+          className="bg-red-500 text-white py-2 px-4 rounded-lg flex items-center hover:bg-red-600 transition-colors"
+        >
+          <RefreshCw className="h-4 w-4 mr-2" /> Повторить попытку
+        </button>
+      </div>
+    );
+  }
+
+  if (isLoading || !playerState) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
+        <Loader className="animate-spin h-10 w-10 text-indigo-600 mb-4" />
+        <p className="text-xl font-medium text-gray-700">Загрузка состояния игрока...</p>
+      </div>
+    );
+  }
+  
+  const canUpgrade = playerState.score >= UPGRADE_COST;
+
+  return (
+    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-start p-4 font-sans text-white">
+      <script src="https://cdn.tailwindcss.com"></script>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+
+        .tap-animation {
+          transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+          transform: scale(0.95);
+          box-shadow: 0 0 10px rgba(255, 255, 255, 0.5), 0 0 20px rgba(79, 70, 229, 0.8);
         }
-        if (gameState.collected_amount > 0) {
-            showNotification(`Также собрано: ${gameState.collected_amount.toFixed(2)} BossCoin!`, 'info');
+
+        .tap-icon-bounce {
+            animation: bounce-in 0.2s;
         }
-    } catch (error) {
-        console.error("Не удалось купить сектор:", error);
-        showNotification("Ошибка покупки сектора. Попробуйте еще раз.", 'error');
-    }
-}
 
-// --- Утилиты Рендеринга ---
-
-// ... (Функции calculateDisplayIncome, getSectorConfig, renderGame, renderError, showNotification остаются БЕЗ ИЗМЕНЕНИЙ)
-
-function calculateDisplayIncome() {
-    if (!gameState) return 0.0;
-    
-    // Разница между текущим временем и last_collection_time (в секундах)
-    const lastTime = gameState.last_collection_time ? new Date(gameState.last_collection_time._seconds * 1000) : new Date();
-    const now = new Date();
-    
-    let timeSinceLast = (now.getTime() - lastTime.getTime()) / 1000;
-    
-    // Ограничение накопления 7 днями (как на бэкенде)
-    const maxSeconds = 7 * 24 * 60 * 60;
-    if (timeSinceLast > maxSeconds) {
-        timeSinceLast = maxSeconds;
-    }
-    
-    let totalIncomePerSecond = 0.0;
-    const sectors = gameState.sectors || {};
-    
-    // Расчет общего дохода в секунду
-    for (const [sectorId, level] of Object.entries(sectors)) {
-        const config = getSectorConfig(sectorId);
-        if (config && level > 0) {
-            totalIncomePerSecond += config.passive_income * level;
+        @keyframes bounce-in {
+            0% { opacity: 0; transform: translateY(20px) scale(0.5); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
         }
-    }
-    
-    // Накопленный доход (доступный + доход за последние секунды)
-    const accruedIncome = gameState.available_income + (totalIncomePerSecond * timeSinceLast);
+      `}</style>
 
-    return accruedIncome > 0 ? accruedIncome : 0.0;
-}
+      {/* Заголовок и Информация */}
+      <div className="w-full max-w-md text-center mb-6 pt-4">
+        <h1 className="text-3xl font-bold text-indigo-400">Cosmic Clicker 🌌</h1>
+        <p className="text-sm text-gray-400 mt-1">
+          Пользователь: <span className="font-mono bg-gray-800 px-2 py-0.5 rounded text-indigo-300 text-xs">{MOCK_USER_ID}</span>
+        </p>
+      </div>
 
-function getSectorConfig(sectorId) {
-    // Эта конфигурация должна соответствовать бэкенду
-    const configs = {
-        "sector1": {"name": "Сектор 'А'", "passive_income": 0.5, "base_cost": 100.0},
-        "sector2": {"name": "Сектор 'B'", "passive_income": 2.0, "base_cost": 500.0},
-        "sector3": {"name": "Сектор 'C'", "passive_income": 10.0, "base_cost": 2500.0},
-    };
-    return configs[sectorId];
-}
+      {/* Секция Счетчика */}
+      <div className="w-full max-w-md bg-gray-800 p-6 rounded-2xl shadow-2xl border border-gray-700 mb-8">
+        <div className="flex flex-col items-center">
+          <p className="text-gray-400 text-xl font-medium mb-1">Ваши Очки (Score):</p>
+          <p className="text-7xl font-extrabold text-white tracking-tight leading-none transition-transform duration-100">
+            {playerState.score.toLocaleString()}
+          </p>
+          <p className="text-lg font-medium text-green-400 mt-2 flex items-center">
+            <Zap className="h-5 w-5 mr-1 text-yellow-400" />
+            Кликов за тап: {playerState.clicks_per_tap}
+          </p>
+        </div>
+      </div>
 
-function renderGame() {
-    const appContainer = document.getElementById('app-container');
-    if (!gameState) {
-        appContainer.innerHTML = '<div class="p-6 text-center text-white">Загрузка...</div>';
-        return;
-    }
+      {/* Кнопка Клика */}
+      <div 
+        onClick={handleTap}
+        className={`
+          w-48 h-48 bg-indigo-600 rounded-full flex items-center justify-center 
+          shadow-indigo-500/50 cursor-pointer user-select-none transition-all duration-100 
+          ${tapAnimation ? 'tap-animation shadow-xl' : 'shadow-2xl hover:bg-indigo-700 active:shadow-lg'}
+        `}
+      >
+        <Zap className={`h-24 w-24 text-yellow-300 ${tapAnimation ? 'tap-icon-bounce' : ''}`} />
+      </div>
 
-    const currentBalance = gameState.balance || 0;
-    const passiveIncomePerSecond = Object.entries(gameState.sectors || {}).reduce((sum, [id, level]) => {
-        const config = getSectorConfig(id);
-        return sum + (config ? config.passive_income * level : 0);
-    }, 0);
-    const availableIncome = calculateDisplayIncome();
-
-    let sectorsHtml = '';
-    const sectorIds = ['sector1', 'sector2', 'sector3'];
-
-    sectorIds.forEach(sectorId => {
-        const config = getSectorConfig(sectorId);
-        const currentLevel = gameState.sectors[sectorId] || 0;
-        const nextLevel = currentLevel + 1;
-        const cost = config.base_cost * nextLevel;
+      <p className="text-gray-500 mt-4 text-sm">Нажмите, чтобы получить {playerState.clicks_per_tap} очков!</p>
+      
+      {/* Секция Улучшений */}
+      <div className="w-full max-w-md mt-10 p-4 bg-gray-800 rounded-2xl border border-gray-700 shadow-2xl">
+        <h3 className="text-xl font-semibold text-indigo-400 mb-3 flex items-center">
+          <Gift className="h-5 w-5 mr-2" /> Улучшения
+        </h3>
         
-        sectorsHtml += `
-            <div class="bg-blue-800 p-4 rounded-xl shadow-lg flex justify-between items-center mb-4">
-                <div>
-                    <h3 class="text-lg font-bold text-white">${config.name}</h3>
-                    <p class="text-sm text-gray-300">Уровень: ${currentLevel} (Доход: ${config.passive_income * currentLevel} / сек)</p>
-                    <p class="text-xs text-gray-400 mt-1">Следующий ур. +${config.passive_income} / сек.</p>
-                </div>
-                <button 
-                    onclick="buySector('${sectorId}')"
-                    class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition duration-150 ease-in-out shadow-md disabled:bg-gray-500 disabled:cursor-not-allowed"
-                    ${currentBalance < cost ? 'disabled' : ''}
-                >
-                    Купить (${cost.toFixed(2)} BC)
-                </button>
+        <div className={`p-4 rounded-xl transition-all duration-300 
+          ${canUpgrade ? 'bg-green-600 hover:bg-green-700 shadow-lg' : 'bg-gray-700 cursor-not-allowed opacity-70'}`}
+        >
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-lg font-bold">Увеличение Clicks per Tap (+1)</p>
+              <p className="text-sm mt-1">Текущий бонус: +{playerState.clicks_per_tap}</p>
             </div>
-        `;
-    });
-
-    appContainer.innerHTML = `
-        <div class="p-4 sm:p-6 md:p-8">
-            <h1 class="text-3xl font-extrabold text-white text-center mb-6">TashBoss Clicker</h1>
-
-            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl mb-6">
-                <p class="text-xl text-gray-300">Баланс BossCoin (BC):</p>
-                <p class="text-4xl font-black text-yellow-400 mt-1">${currentBalance.toFixed(2)}</p>
-            </div>
-
-            <div class="bg-gray-800 p-6 rounded-2xl shadow-xl mb-6 flex justify-between items-center">
-                <div>
-                    <p class="text-lg text-gray-300">Накопленный доход:</p>
-                    <p class="text-2xl font-bold text-green-400 mt-1">${availableIncome.toFixed(2)} BC</p>
-                    <p class="text-sm text-gray-400 mt-2">Пассивный доход: ${passiveIncomePerSecond.toFixed(2)} BC / сек</p>
-                </div>
-                <button 
-                    onclick="collectIncome()"
-                    class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl transition duration-150 ease-in-out shadow-lg disabled:bg-gray-500 disabled:cursor-not-allowed"
-                    ${availableIncome < 0.01 ? 'disabled' : ''}
-                >
-                    Собрать
-                </button>
-            </div>
-
-            <h2 class="text-2xl font-bold text-white mb-4 border-b border-blue-700 pb-2">Развитие бизнеса</h2>
-            ${sectorsHtml}
             
-            <p class="text-center text-gray-500 mt-8 text-sm">Ваш User ID: <span class="break-all">${userId}</span></p>
+            <button
+              onClick={handleUpgrade}
+              disabled={!canUpgrade}
+              className={`py-2 px-4 rounded-full font-bold transition-colors shadow-md flex items-center
+                ${canUpgrade ? 'bg-white text-green-700 hover:bg-gray-200' : 'bg-gray-500 text-gray-300'}`}
+              title={canUpgrade ? "" : `Необходимо ${UPGRADE_COST} очков`}
+            >
+              <ChevronUp className="h-4 w-4 mr-1" />
+              {UPGRADE_COST.toLocaleString()}
+            </button>
+          </div>
         </div>
-    `;
-}
+      </div>
+    </div>
+  );
+};
 
-function renderError(message) {
-    const appContainer = document.getElementById('app-container');
-     appContainer.innerHTML = `
-        <div class="p-6 bg-red-900 rounded-xl shadow-2xl max-w-sm mx-auto mt-20 text-center">
-            <h1 class="text-xl font-bold text-white mb-4">TashBoss Clicker</h1>
-            <p class="text-red-300">${message}</p>
-        </div>
-    `;
-}
-
-function showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    const color = type === 'success' ? 'bg-green-500' : type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500';
-    
-    notification.className = `fixed bottom-4 left-1/2 transform -translate-x-1/2 p-3 ${color} text-white rounded-lg shadow-xl z-50 transition-opacity duration-300 opacity-0`;
-    notification.textContent = message;
-    
-    document.body.appendChild(notification);
-    
-    // Показать и скрыть
-    setTimeout(() => {
-        notification.classList.remove('opacity-0');
-        notification.classList.add('opacity-100');
-    }, 10);
-    
-    setTimeout(() => {
-        notification.classList.remove('opacity-100');
-        notification.classList.add('opacity-0');
-        notification.addEventListener('transitionend', () => notification.remove());
-    }, 3000);
-}
-
-
-// Запуск инициализации при загрузке окна
-window.onload = initAuth;
+export default App;
