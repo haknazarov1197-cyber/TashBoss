@@ -1,192 +1,166 @@
 import os
 import json
-import asyncio
-from typing import Dict, Any
-from fastapi import FastAPI, HTTPException, Request # Добавил Request
-# Для работы с firebase-admin необходимо, чтобы библиотека была установлена
-from firebase_admin import initialize_app, firestore, credentials
+import logging
+from typing import Optional, Any, Dict
 
-# --- КОНФИГУРАЦИЯ FIREBASE ---
-# Переменные, предоставленные средой Canvas
-FIREBASE_CONFIG_JSON = os.environ.get('__firebase_config')
-APP_ID = os.environ.get('__app_id', 'default-app-id')
+from fastapi import FastAPI, Request, status, HTTPException
+from fastapi.responses import JSONResponse
+import requests
+import firebase_admin
+from firebase_admin import credentials, firestore
 
-db = None
-# Используем firebase_app для экземпляра Firebase Admin SDK
-firebase_app = None 
-# Переменная 'app' будет использоваться для FastAPI
-API_INITIALIZED = False
+# --------------------------
+# 1. SETUP FIREBASE & LOGGER
+# --------------------------
 
-initial_player_data = {
-    "score": 0,
-    "clicks_per_tap": 1
-}
+# Environment Variables
+# The __firebase_config is injected by the environment; we use os.environ['FIREBASE_CONFIG'] as a fallback.
+FIREBASE_CONFIG_JSON = os.environ.get('FIREBASE_CONFIG')
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
-def initialize_firebase():
-    """Инициализирует Firebase/Firestore."""
-    # Изменяем глобальный список, чтобы избежать перезаписи FastAPI app
-    global db, firebase_app, API_INITIALIZED
-    
-    if API_INITIALIZED:
-        return
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    print("--- Попытка инициализации Firebase ---")
-    if not FIREBASE_CONFIG_JSON:
-        print("ОШИБКА: Переменная __firebase_config не найдена.")
-        raise RuntimeError("Firebase config не предоставлен в среде.")
+# Initialize Firebase (this logic is typically handled by the runtime environment)
+try:
+    if FIREBASE_CONFIG_JSON:
+        firebase_config = json.loads(FIREBASE_CONFIG_JSON)
+        # Check if Firebase is already initialized
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(firebase_config)
+            firebase_admin.initialize_app(cred)
+            logger.info("--- Firebase initialized successfully. ---")
+            db = firestore.client()
+        else:
+            db = firestore.client()
+            logger.info("--- Firebase was already initialized. ---")
+    else:
+        logger.error("--- FIREBASE_CONFIG is missing. Firestore will not be available. ---")
+except Exception as e:
+    logger.error(f"--- ERROR initializing Firebase: {e} ---")
+
+# --------------------------
+# 2. SETUP FASTAPI
+# --------------------------
+app = FastAPI(title="Crypto Clicker Bot API")
+
+# --------------------------
+# 3. HELPER FUNCTIONS
+# --------------------------
+
+def send_message(chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Sends a message back to the Telegram user using the Bot API.
+    """
+    if not TELEGRAM_TOKEN:
+        logger.error("TELEGRAM_TOKEN is not set. Cannot send message.")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'Markdown'
+    }
+    if reply_markup:
+        payload['reply_markup'] = json.dumps(reply_markup)
 
     try:
-        config_data = json.loads(FIREBASE_CONFIG_JSON)
-        cred = credentials.Certificate(config_data)
-        
-        # Инициализация приложения Firebase (используем firebase_app, чтобы не перезаписать FastAPI app)
-        firebase_app = initialize_app(cred)
-        db = firestore.client()
-        API_INITIALIZED = True
-        
-        # КРИТИЧНО ВАЖНЫЙ ВЫВОД: Project ID
-        project_id = config_data.get('project_id', 'НЕИЗВЕСТЕН')
-        print(f"--- ИСПОЛЬЗУЕМЫЙ PROJECT ID FIREBASE: {project_id} ---")
-        print(f"УСПЕХ: Firebase инициализирован. ID приложения: {APP_ID}")
-        
-    except Exception as e:
-        print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать Firebase. {e}")
-        # Вызываем исключение, чтобы сервер упал, если инициализация не удалась
-        raise RuntimeError(f"Не удалось инициализировать Firestore: {e}")
+        response = requests.post(url, json=payload)
+        response.raise_for_status() # Raise exception for bad status codes
+        logger.info(f"Message sent to chat {chat_id}. Status: {response.status_code}")
+        return True
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"Telegram API HTTP error: {e}. Response: {response.text}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error sending message to Telegram: {e}")
+        return False
 
-# Инициализируем FastAPI и Firebase
-app = FastAPI()
-initialize_firebase()
+# --------------------------
+# 4. BOT WEBHOOK ENDPOINT (UPDATED)
+# --------------------------
 
-
-# --- Вспомогательные функции для Firestore с асинхронной оберткой ---
-# Эти функции используют run_in_executor для корректного выполнения синхронных 
-# вызовов Firestore внутри асинхронной среды FastAPI.
-
-def get_player_doc_ref(user_id: str):
-    """Возвращает ссылку на документ игрока."""
-    return db.collection(
-        'artifacts', APP_ID, 'users', user_id, 'game_state'
-    ).document('player_doc')
-
-def _fetch_data_sync(user_id: str):
-    """Синхронная функция получения данных (для выполнения в Executor)."""
-    doc_ref = get_player_doc_ref(user_id)
-    doc = doc_ref.get()
-    
-    if doc.exists:
-        return doc.to_dict()
-    else:
-        # Инициализация нового игрока (тоже синхронный вызов)
-        doc_ref.set(initial_player_data)
-        return initial_player_data
-
-async def get_player_state(user_id: str) -> Dict[str, Any]:
-    """Получает состояние игрока, выполняя синхронный вызов асинхронно."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _fetch_data_sync, user_id)
-
-def _save_data_sync(user_id: str, data: Dict):
-    """Синхронная функция сохранения данных."""
-    doc_ref = get_player_doc_ref(user_id)
-    doc_ref.set(data)
-
-async def save_player_state(user_id: str, data: Dict):
-    """Сохраняет состояние игрока, выполняя синхронный вызов асинхронно."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _save_data_sync, user_id, data)
-
-
-# --- ЭНДПОИНТЫ API ---
-
-@app.get("/")
-async def health_check():
-    """Проверка здоровья API."""
-    return {"message": "Cosmic Clicker API запущен и готов к работе."}
-
-# Новый эндпоинт для вебхука
-@app.post("/webhook")
+@app.post("/webhook", status_code=status.HTTP_200_OK)
 async def telegram_webhook(request: Request):
     """
-    Обрабатывает входящие обновления от Telegram.
-    Поскольку логика бота, вероятно, находится в другом месте,
-    этот эндпоинт просто принимает запрос и возвращает 200 OK.
+    Handles incoming updates from Telegram and processes commands.
     """
-    # Здесь можно добавить логику обработки обновления, например,
-    # отправить его в отдельный асинхронный обработчик.
-    # update = await request.json()
-    # print(f"Получено обновление от Telegram: {update.get('update_id')}")
-
-    # Важно: Telegram ожидает быстрого ответа 200 OK
-    return {"status": "ok"}
-
-
-@app.get("/state/{user_id}")
-async def get_state(user_id: str):
-    """Получает текущее состояние игрока."""
     try:
-        state = await get_player_state(user_id)
-        return state
-    except Exception as e:
-        print(f"Ошибка при получении состояния игрока {user_id}: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Не удалось загрузить состояние игрока из Firestore. Ошибка: {e}"
-        )
-
-@app.post("/tap/{user_id}")
-async def tap_action(user_id: str):
-    """Обрабатывает клик игрока и обновляет счет."""
-    try:
-        current_state = await get_player_state(user_id)
-        clicks_per_tap = current_state.get("clicks_per_tap", 1)
+        update = await request.json()
         
-        new_score = current_state["score"] + clicks_per_tap
-        current_state["score"] = new_score
+        # We only care about messages for now
+        if 'message' not in update:
+            return JSONResponse({"status": "ok", "message": "No message in update"}, status_code=200)
+
+        message = update['message']
+        chat_id = message['chat']['id']
+        text = message.get('text', '')
         
-        await save_player_state(user_id, current_state)
-        
-        return {"new_score": new_score, "clicks_per_tap": clicks_per_tap}
+        logger.info(f"Received message from chat {chat_id}: {text}")
 
-    except Exception as e:
-        print(f"Ошибка при обработке клика для {user_id}: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Не удалось сохранить клик. Ошибка: {e}"
-        )
-
-@app.post("/upgrade/{user_id}")
-async def buy_upgrade(user_id: str):
-    """Обрабатывает покупку улучшения (увеличение clicks_per_tap)."""
-    UPGRADE_COST = 100
-    
-    try:
-        current_state = await get_player_state(user_id)
-        current_score = current_state["score"]
-        current_cpt = current_state["clicks_per_tap"]
-
-        if current_score < UPGRADE_COST:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Недостаточно очков. Требуется {UPGRADE_COST}, доступно {current_score}."
+        # Check for the /start command
+        if text.startswith('/start'):
+            welcome_text = (
+                "Привет! 👋\n\n"
+                "Добро пожаловать в нашу игру-кликер!\n"
+                "Нажмите на кнопку ниже, чтобы начать играть в браузере (в Telegram Mini App)."
             )
+            
+            # --- Inline Keyboard to open Mini App (The button that opens your game) ---
+            # NOTE: REPLACE YOUR_MINI_APP_URL with the actual URL of your Mini App/Frontend
+            # The URL will typically be the same as your primary Render URL (https://tashboss.onrender.com)
+            mini_app_url = os.environ.get('MINI_APP_URL', 'https://tashboss.onrender.com') 
+            
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🚀 Начать игру",
+                            "web_app": {"url": mini_app_url}
+                        }
+                    ]
+                ]
+            }
 
-        new_score = current_score - UPGRADE_COST
-        new_cpt = current_cpt + 1
+            send_message(chat_id, welcome_text, reply_markup=reply_markup)
+            
+        # Add more command handling here (e.g., /balance, /help)
+        elif text.startswith('/'):
+             send_message(chat_id, "Неизвестная команда. Введите /start для начала игры.")
 
-        current_state["score"] = new_score
-        current_state["clicks_per_tap"] = new_cpt
-
-        await save_player_state(user_id, current_state)
-
-        return {"new_score": new_score, "new_clicks_per_tap": new_cpt}
-
-    except HTTPException as http_exc:
-        raise http_exc
+        # Ignore other text messages for now
         
+        return JSONResponse({"status": "ok"}, status_code=200)
+
+    except json.JSONDecodeError:
+        logger.error("Error decoding JSON from Telegram webhook")
+        raise HTTPException(status_code=400, detail="Invalid JSON format")
     except Exception as e:
-        print(f"Ошибка при покупке улучшения для {user_id}: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Не удалось купить улучшение. Ошибка: {e}"
-        )
+        logger.error(f"Error processing Telegram webhook: {e}")
+        # Telegram expects a 200 response even on internal errors to prevent retries
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=200)
+
+# --------------------------
+# 5. API ENDPOINTS (Keep your game logic endpoints)
+# --------------------------
+
+@app.get("/")
+def read_root():
+    return {"message": "Crypto Clicker Bot API is running."}
+
+@app.get("/state")
+def get_game_state(user_id: str):
+    # Placeholder for reading user state from Firestore
+    return {"user_id": user_id, "taps": 0, "level": 1, "balance": 1000}
+
+@app.post("/tap")
+def record_tap(user_id: str):
+    # Placeholder for updating tap count in Firestore
+    return {"user_id": user_id, "taps_added": 1}
+
+@app.post("/upgrade")
+def apply_upgrade(user_id: str, upgrade_type: str):
+    # Placeholder for applying an upgrade
+    return {"user_id": user_id, "upgrade_applied": upgrade_type}
