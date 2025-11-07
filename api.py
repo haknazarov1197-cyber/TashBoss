@@ -2,14 +2,14 @@ import os
 import json
 import logging
 import asyncio
-import time 
+import time
 from typing import Optional, Any, Dict, List
 from fastapi import FastAPI, Request, status, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse 
+from fastapi.responses import JSONResponse, HTMLResponse
 import requests
 import firebase_admin
 from firebase_admin import credentials, firestore
-from fastapi.middleware.cors import CORSMiddleware # Добавляем для безопасности
+from fastapi.middleware.cors import CORSMiddleware
 
 # --------------------------
 # 1. SETUP FIREBASE & LOGGER
@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware # Добавляем для �
 # Environment Variables
 FIREBASE_CONFIG_JSON = os.environ.get('FIREBASE_CONFIG')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-APP_ID = os.environ.get('__app_id', 'default-app-id') 
+APP_ID = os.environ.get('__app_id', 'default-app-id')
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +30,7 @@ def initialize_firebase():
     """Инициализирует Firebase и Firestore клиент."""
     global db
     try:
-        if db is None and FIREBASE_CONFIG_JSON: # Проверяем, чтобы не инициализировать повторно
+        if db is None and FIREBASE_CONFIG_JSON:
             firebase_config = json.loads(FIREBASE_CONFIG_JSON)
             if not firebase_admin._apps:
                 cred = credentials.Certificate(firebase_config)
@@ -42,29 +42,33 @@ def initialize_firebase():
     except Exception as e:
         logger.error(f"--- ERROR initializing Firebase: {e} ---")
 
-# Удаляем глобальный вызов initialize_firebase(), 
-# чтобы избежать ошибки "Firestore is not initialized."
-
-
 # --------------------------
 # 2. GAME DATA AND SETUP
 # --------------------------
 
 # Полный список отраслей (Source of Truth)
+# ВАЖНО: ID здесь - числа (1, 2, 3...), но фронтенд использует строки ('lemonade_stand', 'fast_food').
+# Мы добавим строковые ID для сопоставления.
 INDUSTRIES_LIST = [
-    {"id": 1, "name": "Уборка улиц", "description": "Базовая отрасль — чистота и порядок в городе", "base_cost": 100, "base_income": 1, "cycle_time_sec": 60},
-    {"id": 2, "name": "Коммунальные службы", "description": "Вода, свет, тепло, благоустройство", "base_cost": 300, "base_income": 3, "cycle_time_sec": 50},
-    {"id": 3, "name": "Транспорт", "description": "Автобусы, метро, дороги", "base_cost": 1000, "base_income": 8, "cycle_time_sec": 45},
-    {"id": 4, "name": "Парки и зоны отдыха", "description": "Озеленение, фонтаны, лавочки", "base_cost": 3000, "base_income": 20, "cycle_time_sec": 40},
-    {"id": 5, "name": "Малый бизнес", "description": "Кафе, магазины, рынки", "base_cost": 8000, "base_income": 50, "cycle_time_sec": 35},
-    {"id": 6, "name": "Заводы и фабрики", "description": "Производство и промышленность", "base_cost": 20000, "base_income": 120, "cycle_time_sec": 30},
-    {"id": 7, "name": "Качество воздуха", "description": "Установка фильтров, датчиков, озеленение", "base_cost": 50000, "base_income": 200, "cycle_time_sec": 25},
-    {"id": 8, "name": "IT-парк", "description": "Инновации, цифровые стартапы", "base_cost": 120000, "base_income": 500, "cycle_time_sec": 20},
-    {"id": 9, "name": "Туризм", "description": "Гостиницы, достопримечательности, фестивали", "base_cost": 250000, "base_income": 1000, "cycle_time_sec": 15},
-    {"id": 10, "name": "Международное сотрудничество", "description": "Привлечение инвестиций и развитие связей с другими странами", "base_cost": 1000000, "base_income": 5000, "cycle_time_sec": 10},
+    # Новые строковые ID для фронтенда:
+    {"id": 1, "frontend_id": "lemonade_stand", "name": "Уборка улиц", "description": "Базовая отрасль — чистота и порядок в городе", "base_cost": 100, "base_income": 1, "cycle_time_sec": 60},
+    {"id": 2, "frontend_id": "fast_food", "name": "Коммунальные службы", "description": "Вода, свет, тепло, благоустройство", "base_cost": 300, "base_income": 3, "cycle_time_sec": 50},
+    {"id": 3, "frontend_id": "software_startup", "name": "Транспорт", "description": "Автобусы, метро, дороги", "base_cost": 1000, "base_income": 8, "cycle_time_sec": 45},
+    {"id": 4, "frontend_id": "oil_rig", "name": "Парки и зоны отдыха", "description": "Озеленение, фонтаны, лавочки", "base_cost": 3000, "base_income": 20, "cycle_time_sec": 40},
+    {"id": 5, "frontend_id": "small_business", "name": "Малый бизнес", "description": "Кафе, магазины, рынки", "base_cost": 8000, "base_income": 50, "cycle_time_sec": 35},
+    {"id": 6, "frontend_id": "factories", "name": "Заводы и фабрики", "description": "Производство и промышленность", "base_cost": 20000, "base_income": 120, "cycle_time_sec": 30},
+    {"id": 7, "frontend_id": "air_quality", "name": "Качество воздуха", "description": "Установка фильтров, датчиков, озеленение", "base_cost": 50000, "base_income": 200, "cycle_time_sec": 25},
+    {"id": 8, "frontend_id": "it_park", "name": "IT-парк", "description": "Инновации, цифровые стартапы", "base_cost": 120000, "base_income": 500, "cycle_time_sec": 20},
+    {"id": 9, "frontend_id": "tourism", "name": "Туризм", "description": "Гостиницы, достопримечательности, фестивали", "base_cost": 250000, "base_income": 1000, "cycle_time_sec": 15},
+    {"id": 10, "frontend_id": "international_coop", "name": "Международное сотрудничество", "description": "Привлечение инвестиций и развитие связей с другими странами", "base_cost": 1000000, "base_income": 5000, "cycle_time_sec": 10},
 ]
-# Удобный словарь для быстрого поиска
-INDUSTRIES_DICT = {item['id']: item for item in INDUSTRIES_LIST}
+
+# Удобный словарь для быстрого поиска по ЧИСЛОВОМУ ID
+INDUSTRIES_DICT_BY_INT_ID = {item['id']: item for item in INDUSTRIES_LIST}
+
+# ДОБАВЛЕНО: Удобный словарь для быстрого поиска по СТРОКОВОМУ ID (как шлет фронтенд)
+INDUSTRIES_DICT_BY_FRONTEND_ID = {item['frontend_id']: item for item in INDUSTRIES_LIST}
+
 
 # Начальное состояние игрока
 initial_player_data = {
@@ -153,7 +157,8 @@ def _fetch_data_sync(user_id: str) -> Dict[str, Any]:
     else:
         # Initialize new player
         # NOTE: Дадим начальный капитал, чтобы можно было сразу что-то купить.
-        initial_with_score = {**initial_player_data, "score": 500}
+        # Фронтенд: lemonade_stand стоит 100, fast_food - 500, software_startup - 2000
+        initial_with_score = {**initial_player_data, "score": 2500} # Увеличено для тестирования
         doc_ref.set(initial_with_score)
         return initial_with_score
 
@@ -189,15 +194,16 @@ def calculate_accumulated_profit(player_state: Dict[str, Any]) -> int:
     total_production_per_cycle = 0
     
     for owned_industry in player_state.get('industries', []):
-        industry_id = owned_industry['id']
-        base_data = INDUSTRIES_DICT.get(industry_id)
+        # FIX: Теперь industries хранят ЧИСЛОВОЙ ID (id) для внутреннего использования
+        industry_id_int = owned_industry['id'] 
+        base_data = INDUSTRIES_DICT_BY_INT_ID.get(industry_id_int)
         if not base_data:
-            logger.warning(f"Industry with ID {industry_id} not found in master list.")
+            logger.warning(f"Industry with ID {industry_id_int} not found in master list.")
             continue
 
         # Текущие характеристики отрасли (уровень, доход, время цикла)
         level = owned_industry.get('level', 1)
-        current_income = base_data['base_income'] * level 
+        current_income = base_data['base_income'] * level
         current_cycle_time = base_data['cycle_time_sec']
         
         # Расчет прибыли
@@ -205,9 +211,12 @@ def calculate_accumulated_profit(player_state: Dict[str, Any]) -> int:
             cycles_completed = int(time_passed / current_cycle_time)
             profit = cycles_completed * current_income
             total_profit += profit
-            total_production_per_cycle += current_income 
+            total_production_per_cycle += current_income # Это базовая производительность за цикл
             
     # Сохраняем общую производственную мощность для отображения
+    # На фронтенде это должно быть "Production per Second" (делим на min cycle time или показываем базовое значение)
+    # Так как минимальный цикл 10 сек (max income 5000), то 5000 / 10 = 500 в сек.
+    # Здесь просто суммируем базовые доходы, что не совсем точно, но достаточно для старта.
     player_state['total_production'] = total_production_per_cycle
     
     return total_profit
@@ -265,7 +274,7 @@ async def telegram_webhook(request: Request):
             )
             
             # MINI_APP_URL should be set to your Render URL (e.g., https://tashboss.onrender.com)
-            mini_app_url = os.environ.get('MINI_APP_URL', 'https://tashboss.onrender.com') 
+            mini_app_url = os.environ.get('MINI_APP_URL', 'https://tashboss.onrender.com')
             
             reply_markup = {
                 "inline_keyboard": [
@@ -310,7 +319,8 @@ async def get_state(user_id: str):
         # Подготовка данных для фронтенда
         response_data = {
             "score": player_state.get('score', 0),
-            "industries": player_state.get('industries', []),
+            # FIX: Передаем список industries в том виде, в котором он хранится (с числовыми ID)
+            "industries": player_state.get('industries', []), 
             "accumulated_profit": accumulated_profit,
             "total_production": player_state.get('total_production', 0),
             "last_check_time": player_state.get('last_check_time', int(time.time()))
@@ -331,23 +341,19 @@ async def get_state(user_id: str):
             detail=f"Failed to load player state from Firestore. Error: {e}"
         )
 
-@app.post("/collect/{user_id}")
-async def collect_profit(user_id: str):
-    """Collects accumulated profit and resets the timer."""
+@app.post("/update/{user_id}")
+async def update_profit(user_id: str):
+    """
+    New endpoint replacing /collect. Collects accumulated profit, updates score, 
+    and returns the new state. This matches the frontend logic.
+    """
     try:
         player_state = await get_player_state(user_id)
         
         # 1. Расчет прибыли
         profit = calculate_accumulated_profit(player_state)
         
-        if profit == 0:
-            return JSONResponse({
-                "score": player_state.get('score', 0),
-                "collected": 0,
-                "message": "Нет накопленной прибыли для сбора."
-            })
-            
-        # 2. Обновление счета и времени
+        # 2. Обновление счета и времени (даже если profit == 0, время обновляется)
         new_score = player_state["score"] + profit
         player_state["score"] = new_score
         player_state["last_check_time"] = int(time.time())
@@ -355,28 +361,38 @@ async def collect_profit(user_id: str):
         # 3. Сохранение
         await save_player_state(user_id, player_state)
         
+        # 4. Перерасчет общей производственной мощности (обновлено в calculate_accumulated_profit)
+        # Возвращаем полный стейт, как ожидает фронтенд
         return {
             "score": new_score, 
-            "collected": profit, 
-            "message": f"Собрано {profit} BSS."
+            "industries": player_state.get('industries', []),
+            "accumulated_profit": 0, # Сброшено после сбора
+            "total_production": player_state.get('total_production', 0),
+            "last_check_time": player_state.get('last_check_time', int(time.time()))
         }
 
     except Exception as e:
-        logger.error(f"Error collecting profit for {user_id}: {e}")
+        logger.error(f"Error updating profit for {user_id}: {e}")
         raise HTTPException(
             status_code=500, 
-            detail=f"Failed to collect profit. Error: {e}"
+            detail=f"Failed to update profit. Error: {e}"
         )
 
-@app.post("/buy/{user_id}/{industry_id}")
-async def buy_industry(user_id: str, industry_id: int):
+
+@app.post("/buy/{user_id}/{industry_id_str}")
+# ИСПРАВЛЕНИЕ 1: industry_id теперь ожидается как СТРОКА (industry_id_str: str)
+async def buy_industry(user_id: str, industry_id_str: str):
     """Allows a player to purchase a new industry."""
     
-    industry_data = INDUSTRIES_DICT.get(industry_id)
+    # ИСПРАВЛЕНИЕ 2: Ищем отрасль по строковому ID, который пришел с фронтенда
+    industry_data = INDUSTRIES_DICT_BY_FRONTEND_ID.get(industry_id_str)
+
     if not industry_data:
-        raise HTTPException(status_code=404, detail="Industry not found.")
+        raise HTTPException(status_code=404, detail=f"Industry with ID '{industry_id_str}' not found.")
         
     cost = industry_data['base_cost']
+    # Получаем ЧИСЛОВОЙ ID для сохранения в Firestore
+    industry_id_int = industry_data['id']
     
     try:
         player_state = await get_player_state(user_id)
@@ -389,19 +405,19 @@ async def buy_industry(user_id: str, industry_id: int):
                 detail=f"Not enough BossCoin (BSS). Requires {cost}, available {current_score}."
             )
         
-        # Проверка, не куплена ли уже отрасль
-        if any(ind['id'] == industry_id for ind in player_state["industries"]):
+        # Проверка, не куплена ли уже отрасль (используем ЧИСЛОВОЙ ID для проверки)
+        if any(ind['id'] == industry_id_int for ind in player_state["industries"]):
              raise HTTPException(
-                status_code=400, 
-                detail="Industry already owned. Upgrades are not yet implemented."
-            )
+                 status_code=400, 
+                 detail="Industry already owned. Upgrades are not yet implemented."
+             )
 
         # 1. Списание BSS
         new_score = current_score - cost
 
         # 2. Добавление отрасли (инициализация уровня)
         new_industry_instance = {
-            "id": industry_id,
+            "id": industry_id_int, # Используем ЧИСЛОВОЙ ID для базы данных
             "level": 1,
             "is_responsible_assigned": False, 
             "industry_name": industry_data['name'] 
@@ -416,10 +432,13 @@ async def buy_industry(user_id: str, industry_id: int):
         # 4. Перерасчет общей производственной мощности
         calculate_accumulated_profit(player_state)
 
+        # Возвращаем полный стейт, как ожидает фронтенд
         return {
             "score": new_score, 
-            "new_industry": new_industry_instance,
-            "total_production": player_state.get('total_production', 0)
+            "industries": player_state.get('industries', []),
+            "accumulated_profit": 0,
+            "total_production": player_state.get('total_production', 0),
+            "last_check_time": player_state.get('last_check_time', int(time.time()))
         }
 
     except HTTPException as http_exc:
@@ -436,14 +455,21 @@ async def buy_industry(user_id: str, industry_id: int):
 # 8. REMOVING OLD PLACEHOLDERS
 # --------------------------
 
-@app.get("/state")
-def remove_old_state():
-    raise HTTPException(status_code=404, detail="Use /state/{user_id} endpoint instead.")
+@app.post("/collect/{user_id}")
+async def old_collect_profit(user_id: str):
+    """Old collect endpoint. Redirects to /update."""
+    logger.warning(f"Deprecated endpoint /collect/{user_id} used. Redirecting to /update.")
+    # Используем логику /update
+    return await update_profit(user_id)
 
 @app.post("/tap")
 def remove_old_tap():
-    raise HTTPException(status_code=404, detail="Use /collect/{user_id} endpoint instead.")
+    raise HTTPException(status_code=404, detail="Use /update/{user_id} endpoint instead.")
 
 @app.post("/upgrade")
 def remove_old_upgrade():
-    raise HTTPException(status_code=404, detail="Use /buy/{user_id}/{industry_id} for purchasing industries instead.")
+    raise HTTPException(status_code=404, detail="Use /buy/{user_id}/{industry_id_str} for purchasing industries instead.")
+
+@app.get("/state")
+def remove_old_state():
+    raise HTTPException(status_code=404, detail="Use /state/{user_id} endpoint instead.")
