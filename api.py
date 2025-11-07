@@ -1,8 +1,8 @@
 import os
 import json
 import asyncio
-from typing import Dict
-from fastapi import FastAPI, HTTPException
+from typing import Dict, Any
+from fastapi import FastAPI, HTTPException, Request # Добавил Request
 # Для работы с firebase-admin необходимо, чтобы библиотека была установлена
 from firebase_admin import initialize_app, firestore, credentials
 
@@ -81,7 +81,7 @@ def _fetch_data_sync(user_id: str):
         doc_ref.set(initial_player_data)
         return initial_player_data
 
-async def get_player_state(user_id: str) -> Dict:
+async def get_player_state(user_id: str) -> Dict[str, Any]:
     """Получает состояние игрока, выполняя синхронный вызов асинхронно."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _fetch_data_sync, user_id)
@@ -103,6 +103,23 @@ async def save_player_state(user_id: str, data: Dict):
 async def health_check():
     """Проверка здоровья API."""
     return {"message": "Cosmic Clicker API запущен и готов к работе."}
+
+# Новый эндпоинт для вебхука
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    """
+    Обрабатывает входящие обновления от Telegram.
+    Поскольку логика бота, вероятно, находится в другом месте,
+    этот эндпоинт просто принимает запрос и возвращает 200 OK.
+    """
+    # Здесь можно добавить логику обработки обновления, например,
+    # отправить его в отдельный асинхронный обработчик.
+    # update = await request.json()
+    # print(f"Получено обновление от Telegram: {update.get('update_id')}")
+
+    # Важно: Telegram ожидает быстрого ответа 200 OK
+    return {"status": "ok"}
+
 
 @app.get("/state/{user_id}")
 async def get_state(user_id: str):
