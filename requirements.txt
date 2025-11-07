@@ -3,6 +3,7 @@ starlette
 uvicorn
 gunicorn
 firebase-admin
+google-cloud-firestore  # Добавлено для явной установки, чтобы избежать ModuleNotFoundError
 python-telegram-bot
 httpx
 python-dotenv
