@@ -1,10 +1,12 @@
 import os
 import json
 import logging
-from typing import Optional, Any, Dict
-
+import asyncio
+import time # Добавлено для работы со временем
+from typing import Optional, Any, Dict, List
 from fastapi import FastAPI, Request, status, HTTPException
-from fastapi.responses import JSONResponse
+# Импортируем HTMLResponse для отдачи фронтенда
+from fastapi.responses import JSONResponse, HTMLResponse 
 import requests
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -14,45 +16,78 @@ from firebase_admin import credentials, firestore
 # --------------------------
 
 # Environment Variables
-# The __firebase_config is injected by the environment; we use os.environ['FIREBASE_CONFIG'] as a fallback.
 FIREBASE_CONFIG_JSON = os.environ.get('FIREBASE_CONFIG')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+# Добавляем APP_ID для корректного пути в Firestore
+APP_ID = os.environ.get('__app_id', 'default-app-id') 
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Firebase (this logic is typically handled by the runtime environment)
-try:
-    if FIREBASE_CONFIG_JSON:
-        firebase_config = json.loads(FIREBASE_CONFIG_JSON)
-        # Check if Firebase is already initialized
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(firebase_config)
-            firebase_admin.initialize_app(cred)
-            logger.info("--- Firebase initialized successfully. ---")
+db = None
+
+def initialize_firebase():
+    global db
+    try:
+        if FIREBASE_CONFIG_JSON:
+            firebase_config = json.loads(FIREBASE_CONFIG_JSON)
+            if not firebase_admin._apps:
+                cred = credentials.Certificate(firebase_config)
+                firebase_admin.initialize_app(cred)
+                logger.info("--- Firebase initialized successfully. ---")
             db = firestore.client()
         else:
-            db = firestore.client()
-            logger.info("--- Firebase was already initialized. ---")
-    else:
-        logger.error("--- FIREBASE_CONFIG is missing. Firestore will not be available. ---")
-except Exception as e:
-    logger.error(f"--- ERROR initializing Firebase: {e} ---")
+            logger.error("--- FIREBASE_CONFIG is missing. Firestore will not be available. ---")
+    except Exception as e:
+        logger.error(f"--- ERROR initializing Firebase: {e} ---")
+
+# Вызываем инициализацию
+initialize_firebase()
 
 # --------------------------
-# 2. SETUP FASTAPI
+# 2. GAME DATA AND SETUP
 # --------------------------
-app = FastAPI(title="Crypto Clicker Bot API")
+
+# Полный список отраслей (Source of Truth)
+INDUSTRIES_LIST = [
+    {"id": 1, "name": "Уборка улиц", "description": "Базовая отрасль — чистота и порядок в городе", "base_cost": 100, "base_income": 1, "cycle_time_sec": 60},
+    {"id": 2, "name": "Коммунальные службы", "description": "Вода, свет, тепло, благоустройство", "base_cost": 300, "base_income": 3, "cycle_time_sec": 50},
+    {"id": 3, "name": "Транспорт", "description": "Автобусы, метро, дороги", "base_cost": 1000, "base_income": 8, "cycle_time_sec": 45},
+    {"id": 4, "name": "Парки и зоны отдыха", "description": "Озеленение, фонтаны, лавочки", "base_cost": 3000, "base_income": 20, "cycle_time_sec": 40},
+    {"id": 5, "name": "Малый бизнес", "description": "Кафе, магазины, рынки", "base_cost": 8000, "base_income": 50, "cycle_time_sec": 35},
+    {"id": 6, "name": "Заводы и фабрики", "description": "Производство и промышленность", "base_cost": 20000, "base_income": 120, "cycle_time_sec": 30},
+    {"id": 7, "name": "Качество воздуха", "description": "Установка фильтров, датчиков, озеленение", "base_cost": 50000, "base_income": 200, "cycle_time_sec": 25},
+    {"id": 8, "name": "IT-парк", "description": "Инновации, цифровые стартапы", "base_cost": 120000, "base_income": 500, "cycle_time_sec": 20},
+    {"id": 9, "name": "Туризм", "description": "Гостиницы, достопримечательности, фестивали", "base_cost": 250000, "base_income": 1000, "cycle_time_sec": 15},
+    {"id": 10, "name": "Международное сотрудничество", "description": "Привлечение инвестиций и развитие связей с другими странами", "base_cost": 1000000, "base_income": 5000, "cycle_time_sec": 10},
+]
+# Удобный словарь для быстрого поиска
+INDUSTRIES_DICT = {item['id']: item for item in INDUSTRIES_LIST}
+
+# Начальное состояние игрока
+initial_player_data = {
+    "score": 0, # BossCoin (BSS)
+    "industries": [], # List of owned industries
+    "last_check_time": int(time.time()), # Timestamp of last login/check
+    "total_production": 0, # Total income per cycle time (for display)
+}
+
 
 # --------------------------
-# 3. HELPER FUNCTIONS
+# 3. SETUP FASTAPI
 # --------------------------
+app = FastAPI(title="TashBoss Bot API")
+
+
+# --------------------------
+# 4. HELPER FUNCTIONS
+# --------------------------
+
+# --- Telegram Helper ---
 
 def send_message(chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
-    """
-    Sends a message back to the Telegram user using the Bot API.
-    """
+    """Sends a message back to the Telegram user."""
     if not TELEGRAM_TOKEN:
         logger.error("TELEGRAM_TOKEN is not set. Cannot send message.")
         return False
@@ -68,7 +103,7 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]]
 
     try:
         response = requests.post(url, json=payload)
-        response.raise_for_status() # Raise exception for bad status codes
+        response.raise_for_status()
         logger.info(f"Message sent to chat {chat_id}. Status: {response.status_code}")
         return True
     except requests.exceptions.HTTPError as e:
@@ -78,8 +113,112 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]]
         logger.error(f"Error sending message to Telegram: {e}")
         return False
 
+# --- Firestore Helpers (Async wrapper for synchronous calls) ---
+
+def get_player_doc_ref(user_id: str):
+    """Returns the document reference for a player's game state."""
+    # Используем стандартный путь для приватных данных с учетом APP_ID
+    return db.collection(
+        'artifacts', APP_ID, 'users', user_id, 'game_state'
+    ).document('player_doc')
+
+def _fetch_data_sync(user_id: str) -> Dict[str, Any]:
+    """Synchronous function to fetch or initialize player data."""
+    if not db:
+        raise RuntimeError("Firestore is not initialized.")
+        
+    doc_ref = get_player_doc_ref(user_id)
+    doc = doc_ref.get()
+    
+    if doc.exists:
+        data = doc.to_dict()
+        # Гарантируем наличие необходимых полей, используя merge
+        return {**initial_player_data, **data}
+    else:
+        # Initialize new player
+        doc_ref.set(initial_player_data)
+        return initial_player_data
+
+async def get_player_state(user_id: str) -> Dict[str, Any]:
+    """Fetches player state asynchronously."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _fetch_data_sync, user_id)
+
+def _save_data_sync(user_id: str, data: Dict):
+    """Synchronous function to save data."""
+    if not db:
+        raise RuntimeError("Firestore is not initialized.")
+        
+    doc_ref = get_player_doc_ref(user_id)
+    doc_ref.set(data, merge=True)
+
+async def save_player_state(user_id: str, data: Dict):
+    """Saves player state asynchronously."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _save_data_sync, user_id, data)
+
+# --- Game Logic Helper ---
+
+def calculate_accumulated_profit(player_state: Dict[str, Any]) -> int:
+    """
+    Calculates the accumulated profit for all owned industries since the last check.
+    """
+    current_time = int(time.time())
+    last_check = player_state.get('last_check_time', current_time)
+    time_passed = current_time - last_check
+    
+    total_profit = 0
+    total_production_per_cycle = 0
+    
+    for owned_industry in player_state.get('industries', []):
+        industry_id = owned_industry['id']
+        base_data = INDUSTRIES_DICT.get(industry_id)
+        if not base_data:
+            logger.warning(f"Industry with ID {industry_id} not found in master list.")
+            continue
+
+        # Текущие характеристики отрасли (уровень, доход, время цикла)
+        level = owned_industry.get('level', 1)
+        current_income = base_data['base_income'] * level 
+        current_cycle_time = base_data['cycle_time_sec']
+        
+        # Расчет прибыли
+        if current_cycle_time > 0:
+            cycles_completed = int(time_passed / current_cycle_time)
+            profit = cycles_completed * current_income
+            total_profit += profit
+            total_production_per_cycle += current_income 
+            
+    # Сохраняем общую производственную мощность для отображения
+    player_state['total_production'] = total_production_per_cycle
+    
+    return total_profit
+
 # --------------------------
-# 4. BOT WEBHOOK ENDPOINT (UPDATED)
+# 5. FRONTEND (HTML) ENDPOINT
+# --------------------------
+
+# Чтение содержимого index.html
+try:
+    with open("index.html", "r", encoding="utf-8") as f:
+        HTML_CONTENT = f.read()
+except FileNotFoundError:
+    HTML_CONTENT = "<h1>Error: Mini App HTML file (index.html) not found!</h1>"
+    logger.error("index.html was not found.")
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_mini_app():
+    """Serves the static HTML/JS/CSS file for the Telegram Mini App (the game frontend)."""
+    return HTML_CONTENT
+
+@app.get("/master-data")
+async def get_master_data():
+    """Provides the list of all available industries and costs."""
+    return INDUSTRIES_LIST
+
+
+# --------------------------
+# 6. BOT WEBHOOK ENDPOINT
 # --------------------------
 
 @app.post("/webhook", status_code=status.HTTP_200_OK)
@@ -90,7 +229,6 @@ async def telegram_webhook(request: Request):
     try:
         update = await request.json()
         
-        # We only care about messages for now
         if 'message' not in update:
             return JSONResponse({"status": "ok", "message": "No message in update"}, status_code=200)
 
@@ -103,21 +241,19 @@ async def telegram_webhook(request: Request):
         # Check for the /start command
         if text.startswith('/start'):
             welcome_text = (
-                "Привет! 👋\n\n"
-                "Добро пожаловать в нашу игру-кликер!\n"
-                "Нажмите на кнопку ниже, чтобы начать играть в браузере (в Telegram Mini App)."
+                "Привет, босс! 👋 Добро пожаловать в **TashBoss**.\n\n"
+                "Валюта: **BossCoin (BSS)**.\n"
+                "Начните с покупки первой отрасли, чтобы создать свой город!"
             )
             
-            # --- Inline Keyboard to open Mini App (The button that opens your game) ---
-            # NOTE: REPLACE YOUR_MINI_APP_URL with the actual URL of your Mini App/Frontend
-            # The URL will typically be the same as your primary Render URL (https://tashboss.onrender.com)
+            # MINI_APP_URL should be set to your Render URL (e.g., https://tashboss.onrender.com)
             mini_app_url = os.environ.get('MINI_APP_URL', 'https://tashboss.onrender.com') 
             
             reply_markup = {
                 "inline_keyboard": [
                     [
                         {
-                            "text": "🚀 Начать игру",
+                            "text": "🏗️ Запустить TashBoss",
                             "web_app": {"url": mini_app_url}
                         }
                     ]
@@ -125,42 +261,162 @@ async def telegram_webhook(request: Request):
             }
 
             send_message(chat_id, welcome_text, reply_markup=reply_markup)
-            
-        # Add more command handling here (e.g., /balance, /help)
-        elif text.startswith('/'):
-             send_message(chat_id, "Неизвестная команда. Введите /start для начала игры.")
-
-        # Ignore other text messages for now
         
+        # Заглушка для других команд, чтобы не возвращать 404
+        elif text.startswith('/'):
+            send_message(chat_id, "Неизвестная команда. Введите /start для начала игры.")
+            
         return JSONResponse({"status": "ok"}, status_code=200)
 
-    except json.JSONDecodeError:
-        logger.error("Error decoding JSON from Telegram webhook")
-        raise HTTPException(status_code=400, detail="Invalid JSON format")
     except Exception as e:
         logger.error(f"Error processing Telegram webhook: {e}")
-        # Telegram expects a 200 response even on internal errors to prevent retries
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=200)
 
+
 # --------------------------
-# 5. API ENDPOINTS (Keep your game logic endpoints)
+# 7. GAME API ENDPOINTS (with Firestore integration)
 # --------------------------
 
-@app.get("/")
-def read_root():
-    return {"message": "Crypto Clicker Bot API is running."}
+@app.get("/state/{user_id}")
+async def get_state(user_id: str):
+    """
+    Retrieves the current game state for a user from Firestore. 
+    Also calculates and returns the accumulated profit since the last check.
+    """
+    try:
+        player_state = await get_player_state(user_id)
+        
+        # Расчет накопленной прибыли
+        accumulated_profit = calculate_accumulated_profit(player_state)
+        
+        # Подготовка данных для фронтенда
+        response_data = {
+            "score": player_state.get('score', 0),
+            "industries": player_state.get('industries', []),
+            "accumulated_profit": accumulated_profit,
+            "total_production": player_state.get('total_production', 0),
+            "last_check_time": player_state.get('last_check_time', int(time.time()))
+        }
+        
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"Error retrieving player state {user_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to load player state from Firestore. Error: {e}"
+        )
+
+@app.post("/collect/{user_id}")
+async def collect_profit(user_id: str):
+    """Collects accumulated profit and resets the timer."""
+    try:
+        player_state = await get_player_state(user_id)
+        
+        # 1. Расчет прибыли
+        profit = calculate_accumulated_profit(player_state)
+        
+        if profit == 0:
+            return JSONResponse({
+                "score": player_state.get('score', 0),
+                "collected": 0,
+                "message": "Нет накопленной прибыли для сбора."
+            })
+            
+        # 2. Обновление счета и времени
+        new_score = player_state["score"] + profit
+        player_state["score"] = new_score
+        player_state["last_check_time"] = int(time.time())
+        
+        # 3. Сохранение
+        await save_player_state(user_id, player_state)
+        
+        return {
+            "score": new_score, 
+            "collected": profit, 
+            "message": f"Собрано {profit} BSS."
+        }
+
+    except Exception as e:
+        logger.error(f"Error collecting profit for {user_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to collect profit. Error: {e}"
+        )
+
+@app.post("/buy/{user_id}/{industry_id}")
+async def buy_industry(user_id: str, industry_id: int):
+    """Allows a player to purchase a new industry."""
+    
+    industry_data = INDUSTRIES_DICT.get(industry_id)
+    if not industry_data:
+        raise HTTPException(status_code=404, detail="Industry not found.")
+        
+    cost = industry_data['base_cost']
+    
+    try:
+        player_state = await get_player_state(user_id)
+        current_score = player_state["score"]
+
+        # Проверка, достаточно ли денег
+        if current_score < cost:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Not enough BossCoin (BSS). Requires {cost}, available {current_score}."
+            )
+
+        # 1. Списание BSS
+        new_score = current_score - cost
+
+        # 2. Добавление отрасли (инициализация уровня)
+        new_industry_instance = {
+            "id": industry_id,
+            "level": 1,
+            # last_collection_time можно не хранить здесь, так как доход рассчитывается 
+            # от общего last_check_time игрока
+            "is_responsible_assigned": False, 
+            "industry_name": industry_data['name'] 
+        }
+        
+        player_state["industries"].append(new_industry_instance)
+        player_state["score"] = new_score
+
+        # 3. Сохранение
+        await save_player_state(user_id, player_state)
+
+        # Перерасчет общей производственной мощности
+        calculate_accumulated_profit(player_state)
+
+        return {
+            "score": new_score, 
+            "new_industry": new_industry_instance,
+            "total_production": player_state.get('total_production', 0)
+        }
+
+    except HTTPException as http_exc:
+        raise http_exc
+        
+    except Exception as e:
+        logger.error(f"Error buying industry for {user_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to buy industry. Error: {e}"
+        )
+
+# --------------------------
+# 8. REMOVING OLD PLACEHOLDERS
+# --------------------------
+
+# Удаляем старые заглушки, чтобы не было конфликта с новыми эндпоинтами
 
 @app.get("/state")
-def get_game_state(user_id: str):
-    # Placeholder for reading user state from Firestore
-    return {"user_id": user_id, "taps": 0, "level": 1, "balance": 1000}
+def remove_old_state(user_id: str):
+    raise HTTPException(status_code=404, detail="Use /state/{user_id} endpoint instead.")
 
 @app.post("/tap")
-def record_tap(user_id: str):
-    # Placeholder for updating tap count in Firestore
-    return {"user_id": user_id, "taps_added": 1}
+def remove_old_tap(user_id: str):
+    raise HTTPException(status_code=404, detail="Use /collect/{user_id} endpoint instead.")
 
 @app.post("/upgrade")
-def apply_upgrade(user_id: str, upgrade_type: str):
-    # Placeholder for applying an upgrade
-    return {"user_id": user_id, "upgrade_applied": upgrade_type}
+def remove_old_upgrade(user_id: str, upgrade_type: str):
+    raise HTTPException(status_code=404, detail="Use /buy/{user_id}/{industry_id} for purchasing industries instead.")
