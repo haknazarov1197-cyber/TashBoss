@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import asyncio
+import time # Добавлен импорт time для time.time()
 from typing import List, Optional, Dict, Any
 
 import firebase_admin
@@ -54,47 +55,38 @@ def init_firebase():
         cred = credentials.Certificate(creds_dict)
         
         # 4. Инициализация приложения
-        # Используем try/except, чтобы избежать ошибки, если приложение уже инициализировано 
-        # (часто бывает в Gunicorn/Uvicorn с несколькими рабочими процессами)
         try:
-            # Инициализация без явного имени приложения (будет [DEFAULT])
             initialize_app(cred)
             logging.info("✅ Инициализация Firebase успешно завершена.")
         except ValueError as e:
-            # Если приложение уже инициализировано, просто игнорируем
             if "already exists" in str(e):
                 logging.info("Приложение Firebase уже инициализировано, продолжаем.")
             else:
-                raise e # Пробрасываем другие ValueError
+                raise e
         except Exception as e:
-            raise e # Пробрасываем любые другие ошибки
+            raise e
 
         # 5. Получение экземпляра Firestore
-        # !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: ЯВНО УКАЗЫВАЕМ ID БАЗЫ ДАННЫХ !!!
-        # ID базы данных по умолчанию всегда '(default)'. Явное указание устраняет ошибку 404.
-        db = firestore.client(database="(default)") 
+        # !!! ИСПРАВЛЕНО: Используем database_id вместо database !!!
+        db = firestore.client(database_id="(default)") 
         logging.info("Экземпляр Firestore доступен.")
 
     except ValueError as e:
         logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: ValueError. Детали: {e}")
-        # Принудительный выход при критической ошибке конфигурации
         sys.exit(1)
     except Exception as e:
         logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: {type(e).__name__}. Детали: {e}")
-        # Принудительный выход при критической ошибке
         sys.exit(1)
 
 
 # --- Настройка FastAPI ---
 
-# FastAPI использует async/await, поэтому блокирующая инициализация Firebase 
-# должна быть вызвана в хуке lifespan, чтобы она выполнилась до обработки первого запроса.
 app = FastAPI(title="Task Manager API (FastAPI + Firestore)")
 
 # Настройка CORS для разрешения запросов с фронтенда
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Разрешаем все источники для тестового развертывания
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,7 +99,6 @@ async def startup_event():
     Вызывается при запуске приложения.
     """
     logging.info("Начало этапа lifespan: Запуск функции init_firebase...")
-    # Оборачиваем блокирующий вызов в asyncio.to_thread для совместимости с ASGI
     await asyncio.to_thread(init_firebase)
 
 
@@ -121,14 +112,11 @@ async def health_check():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service is starting up, Firebase not yet initialized."
         )
-    # Простой тест доступности Firestore (можно сделать более глубокую проверку, но для начала достаточно)
     try:
-        # Пытаемся получить некий произвольный документ, чтобы проверить соединение
-        # Мы ищем в коллекции health_check, которая может не существовать, но это не вызовет 404
+        # Простой тест доступности Firestore
         db.collection("health_check").document("test").get()
         return {"status": "ok", "message": "API is operational and Firebase connection is successful."}
     except Exception as e:
-        # Ошибка 404 о несуществующей БД будет поймана здесь
         logging.error(f"Health check failed due to Firestore connection error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -147,14 +135,11 @@ async def get_all_tasks():
         docs = tasks_ref.stream()
         task_list = []
         for doc in docs:
-            # Создаем словарь из данных документа
             task_data = doc.to_dict()
-            # Добавляем ID документа
             task_data['id'] = doc.id
-            # Валидируем данные через Pydantic модель
             task_list.append(Task(**task_data))
         
-        # Сортируем задачи по времени создания (для имитации порядка, как в UI)
+        # Сортируем задачи по времени создания
         task_list.sort(key=lambda t: t.created_at or 0, reverse=True)
         return task_list
     except Exception as e:
@@ -168,32 +153,17 @@ async def create_task(task: Task):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
 
     tasks_ref = db.collection("tasks")
-    # os.time() не существует. Используем time.time() или datetime.now().timestamp()
-    # Поскольку os.time() - это опечатка, заменим на time.time() и добавим import.
-    # Так как мы не можем менять imports в этом блоке, предположим, что вы ее исправите в оригинале.
-    # Для целей этого примера, используем time.time()
-    
-    # !!! ВАЖНО: В вашем коде опечатка - 'os.time()' не существует. 
-    # Это должно быть 'time.time()' (с импортом 'import time'). 
-    # Внесу это изменение в следующем обновлении, если это не сработает.
-    # Пока оставим как есть, так как это не причина ошибки 404, но это функциональный баг.
-    current_time = time.time() if 'time' in globals() else os.time() 
-    # Так как 'time' не импортирован, я не могу его использовать, оставлю os.time() как есть, 
-    # предполагая, что вы его исправите в своем окружении.
-    import time # Добавим импорт временно, если это сработает.
-    current_time = time.time()
+    current_time = time.time() # Исправлено на time.time()
     
     # Подготавливаем данные для Firestore
     task_data = task.model_dump(exclude={'id', 'created_at', 'updated_at'})
     task_data['created_at'] = current_time
     task_data['updated_at'] = current_time
-    task_data['is_done'] = False # Гарантируем, что новая задача не выполнена
+    task_data['is_done'] = False
     
     try:
-        # Добавляем документ в коллекцию
         doc_ref = tasks_ref.add(task_data)
         
-        # Возвращаем созданную задачу с ID и временными метками
         created_task = Task(id=doc_ref.id, **task_data)
         return created_task
     except Exception as e:
@@ -208,24 +178,21 @@ async def update_task(task_id: str, task_update: Task):
 
     task_ref = db.collection("tasks").document(task_id)
     
-    # Данные для обновления, исключая ID, временные метки и поле is_done, 
-    # если оно не было явно передано (хотя Pydantic гарантирует его наличие)
     update_data = task_update.model_dump(exclude_none=True, exclude={'id', 'created_at', 'updated_at'})
     
     if not update_data:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
 
-    # Используем time.time() вместо os.time()
-    import time
-    update_data['updated_at'] = time.time()
+    update_data['updated_at'] = time.time() # Исправлено на time.time()
     
     try:
-        # Обновляем документ
         task_ref.update(update_data)
         
-        # Получаем обновленный документ для возврата
         updated_doc = task_ref.get()
         if not updated_doc.exists:
+            # Note: The firestore.client().update() method will raise a NotFound exception 
+            # if the document doesn't exist, which will be caught below. 
+            # This manual check is redundant if using client libraries, but safe.
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Task not found after update attempt.")
 
         updated_data = updated_doc.to_dict()
@@ -233,12 +200,11 @@ async def update_task(task_id: str, task_update: Task):
         return updated_task
         
     except HTTPException:
-        # Пробрасываем HTTP ошибки (например, 404)
         raise
     except Exception as e:
-        # Firestore не поднимает 404 ошибку при update, если документа нет. 
-        # Нужно ловить это через исключения или делать пред-проверку (что мы опускаем для простоты).
         logging.error(f"Error updating task {task_id}: {e}")
+        # В более сложных случаях здесь можно проверить, является ли ошибка 404 (NotFound),
+        # но для простоты оставляем общий 500, так как Update не должен быть вызван для несуществующего документа.
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update task.")
 
 
@@ -252,10 +218,7 @@ async def delete_task(task_id: str):
     
     try:
         task_ref.delete()
-        # В случае успешного удаления возвращаем 204 No Content
         return {}
     except Exception as e:
         logging.error(f"Error deleting task {task_id}: {e}")
-        # Если документа не существовало, Firestore обычно просто завершает операцию без ошибки.
-        # Для простоты считаем, что удаление "провалилось" только из-за проблем с БД.
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete task.")
