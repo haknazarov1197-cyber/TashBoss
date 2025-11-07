@@ -1,269 +1,216 @@
 import os
-import sys
 import json
 import logging
-import asyncio
-import time 
-from typing import List, Optional, Dict, Any
+from typing import List
+from uuid import uuid4 # Добавляем для генерации UUID
 
-import firebase_admin
-from firebase_admin import credentials, firestore, initialize_app
-from fastapi import FastAPI, HTTPException, status, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+from firebase_admin import initialize_app, credentials, firestore
 
-# --- Настройка логирования ---
-# Устанавливаем формат и уровень логирования
-logging.basicConfig(level=logging.INFO, 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Настройка констант для Firestore ---
-# ВАЖНО: Эти значения должны быть получены динамически в реальном приложении.
-# Для целей тестирования API используем заглушки.
-APP_ID = 'your_app_id_placeholder' # Замените на фактический ID вашего приложения
-USER_ID = 'test_user_placeholder'  # Замените на фактический ID пользователя (из токена)
-COLLECTION_NAME = 'tasks'
-
-# --- Глобальные переменные Firebase ---
+# Глобальная переменная для базы данных Firestore
 db = None
 
-# --- Модели Pydantic для данных ---
+# --- Модели Pydantic ---
 
-class Task(BaseModel):
-    """Модель задачи."""
-    id: Optional[str] = Field(None, description="Уникальный ID задачи (задается Firestore).")
-    title: str = Field(..., min_length=1, max_length=100, description="Заголовок задачи.")
-    description: Optional[str] = Field(None, description="Подробное описание задачи.")
-    is_done: bool = Field(False, description="Статус выполнения задачи.")
-    created_at: Optional[float] = Field(None, description="Временная метка создания (Unix Timestamp).")
-    updated_at: Optional[float] = Field(None, description="Временная метка последнего обновления.")
+class TaskCreate(BaseModel):
+    """Схема для создания новой задачи (ID генерируется автоматически)."""
+    title: str = Field(..., description="Название задачи")
+    description: str = Field(None, description="Полное описание задачи")
+    completed: bool = Field(False, description="Статус выполнения задачи")
 
+class Task(TaskCreate):
+    """Полная схема задачи, включая ID."""
+    id: str = Field(..., description="Уникальный идентификатор задачи")
 
-# --- Функции инициализации Firebase ---
+    class Config:
+        schema_extra = {
+            "example": {
+                "id": str(uuid4()),
+                "title": "Купить продукты",
+                "description": "Молоко, яйца, хлеб",
+                "completed": False
+            }
+        }
+
+# --- Инициализация Firebase ---
 
 def init_firebase():
     """
     Инициализирует Firebase Admin SDK, используя переменную окружения.
-    Включает КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ для символов новой строки.
     """
     global db
     logging.info("Запуск инициализации Firebase...")
 
     try:
-        # 1. Загрузка учетных данных. Используем более явное имя переменной.
+        # 1. Загрузка учетных данных. Используем имя, которое вы предпочитаете.
+        # ВАЖНО: Убедитесь, что это имя установлено на Render!
         service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
         if not service_account_json:
             logging.critical("Переменная окружения FIREBASE_SERVICE_ACCOUNT_JSON не установлена.")
             raise ValueError("Отсутствуют учетные данные Firebase Service Account.")
 
         # 2. Парсинг JSON
-        creds_dict = json.loads(service_account_json)
-        
-        # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Замена экранированных '\n' на реальные символы новой строки
-        private_key = creds_dict.get('private_key')
-        if private_key and isinstance(private_key, str):
-            # Эта замена необходима, если облачная среда (Render) автоматически 
-            # экранирует '\n' в переменной окружения.
-            creds_dict['private_key'] = private_key.replace(r'\n', '\n')
-            logging.info("Успешно исправлены экранированные символы новой строки в 'private_key'.")
-
-        # 4. Создание учетных данных
-        cred = credentials.Certificate(creds_dict)
-        
-        # 5. Инициализация приложения
         try:
-            initialize_app(cred)
-            logging.info("✅ Инициализация Firebase успешно завершена.")
-        except ValueError as e:
-            if "already exists" in str(e):
-                logging.info("Приложение Firebase уже инициализировано, продолжаем.")
-            else:
-                raise e
-        except Exception as e:
-            raise e
+            # Парсинг строки JSON
+            config = json.loads(service_account_json)
+        except json.JSONDecodeError as e:
+            logging.critical(f"Ошибка парсинга JSON учетной записи сервиса: {e}")
+            raise ValueError("Неверный формат JSON для учетных данных Firebase.")
 
-        # 6. Получение экземпляра Firestore
-        db = firestore.client(database_id="(default)") 
+        # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Исправляем экранированные символы новой строки
+        if "private_key" in config:
+            config["private_key"] = config["private_key"].replace('\\n', '\n')
+            logging.info("Успешно исправлены экранированные символы новой строки в 'private_key'.")
+        
+        # 4. Инициализация приложения
+        cred = credentials.Certificate(config)
+        initialize_app(cred)
+
+        # 5. Получение экземпляра Firestore
+        db = firestore.client()
+        logging.info("✅ Инициализация Firebase успешно завершена.")
         logging.info("Экземпляр Firestore доступен.")
 
-    except ValueError as e:
-        # Обрабатывает ошибки отсутствия переменной окружения или неверного JSON-формата
-        logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: ValueError. Детали: {e}")
-        sys.exit(1)
     except Exception as e:
-        logging.critical(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Инициализация Firebase не удалась. Тип ошибки: {type(e).__name__}. Детали: {e}")
-        sys.exit(1)
+        logging.critical(f"❌ Ошибка при инициализации Firebase: {e}")
+        # В продакшене (Render) это вызовет сбой приложения, что правильно.
+        raise
 
+# --- Инициализация FastAPI и Lifespan Events ---
 
-def get_collection_ref():
-    """Возвращает ссылку на коллекцию 'tasks' в соответствии с правилами Canvas/Firestore."""
-    if db is None:
-        return None
-    
-    # Путь: /artifacts/{APP_ID}/users/{USER_ID}/tasks
-    return db.collection('artifacts').document(APP_ID).collection('users').document(USER_ID).collection(COLLECTION_NAME)
-
-
-# --- Настройка FastAPI ---
-
-app = FastAPI(title="Task Manager API (FastAPI + Firestore)")
-
-# Настройка CORS для разрешения запросов с фронтенда
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+app = FastAPI(
+    title="Менеджер Задач с Firestore (FastAPI)",
+    description="Простой REST API для управления задачами.",
+    version="1.0.0"
 )
 
-
+# Используем событие lifespan для инициализации базы данных
 @app.on_event("startup")
 async def startup_event():
-    """Вызывается при запуске приложения."""
     logging.info("Начало этапа lifespan: Запуск функции init_firebase...")
-    await asyncio.to_thread(init_firebase)
+    init_firebase()
 
+# --- Маршруты API ---
 
-# --- Пути API (Endpoints) ---
+@app.get("/")
+def read_root():
+    """Простой маршрут для проверки работоспособности API."""
+    return {"message": "API Менеджера Задач успешно запущен и работает!"}
 
-@app.get("/", status_code=status.HTTP_200_OK)
-async def health_check():
-    """Проверка состояния сервиса."""
+@app.post("/tasks/", response_model=Task, status_code=status.HTTP_201_CREATED)
+async def create_task(task: TaskCreate):
+    """Создает новую задачу."""
     if db is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Service is starting up, Firebase not yet initialized."
-        )
+        raise HTTPException(status_code=500, detail="База данных не инициализирована.")
+
     try:
-        # Простой тест доступности Firestore (запрос к несуществующему пути)
-        # Это более надежный тест, чем просто вызов doc().get(), так как он инициирует сетевой запрос.
-        db.collection("health_check").document("test").get()
-        return {"status": "ok", "message": "API is operational and Firebase connection is successful."}
+        # Генерируем уникальный ID для нового документа
+        task_id = str(uuid4())
+        
+        # Подготовка данных для сохранения
+        task_data = task.model_dump()
+        
+        # Сохранение в Firestore (используем сгенерированный ID в качестве имени документа)
+        doc_ref = db.collection("tasks").document(task_id)
+        await doc_ref.set(task_data) # set() в Firestore - это асинхронная операция
+
+        # Возвращаем полную модель задачи
+        return Task(id=task_id, **task_data)
+    
     except Exception as e:
-        logging.error(f"Health check failed due to Firestore connection error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"API is operational but Firestore connection failed: {e}"
-        )
+        logging.error(f"Ошибка при создании задачи: {e}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {e}")
 
-
-@app.get("/tasks", response_model=List[Task], status_code=status.HTTP_200_OK)
-async def get_all_tasks():
-    """Получает все задачи из коллекции текущего пользователя."""
-    tasks_ref = get_collection_ref()
-    if tasks_ref is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
-
+@app.get("/tasks/", response_model=List[Task])
+async def read_tasks():
+    """Получает список всех задач."""
+    if db is None:
+        raise HTTPException(status_code=500, detail="База данных не инициализирована.")
+    
     try:
-        # NOTE: Если вы хотите сортировать на стороне сервера, вам нужно будет создать индекс в Firestore.
-        # Для простоты, пока будем сортировать в коде.
-        docs = tasks_ref.stream()
-        task_list = []
+        tasks = []
+        # Получение всех документов из коллекции
+        docs = db.collection("tasks").stream()
+        
         for doc in docs:
-            task_data = doc.to_dict()
-            task_data['id'] = doc.id
-            task_list.append(Task(**task_data))
+            doc_data = doc.to_dict()
+            tasks.append(Task(id=doc.id, **doc_data))
         
-        # Сортируем задачи по времени создания (если оно есть)
-        task_list.sort(key=lambda t: t.created_at or 0, reverse=True)
-        return task_list
-    except Exception as e:
-        logging.error(f"Error fetching tasks: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch tasks.")
-
-@app.post("/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
-async def create_task(task: Task):
-    """Создает новую задачу для текущего пользователя."""
-    tasks_ref = get_collection_ref()
-    if tasks_ref is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
-
-    current_time = time.time()
+        return tasks
     
-    # Подготавливаем данные для Firestore, исключая ID (который генерируется) и метки времени
-    task_data = task.model_dump(exclude={'id', 'created_at', 'updated_at'})
-    task_data['created_at'] = current_time
-    task_data['updated_at'] = current_time
-    task_data['is_done'] = False
+    except Exception as e:
+        logging.error(f"Ошибка при чтении задач: {e}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {e}")
+
+@app.get("/tasks/{task_id}", response_model=Task)
+async def read_task(task_id: str):
+    """Получает одну задачу по ее ID."""
+    if db is None:
+        raise HTTPException(status_code=500, detail="База данных не инициализирована.")
     
     try:
-        # doc_ref здесь является кортежем (update_time, DocumentReference)
-        _, doc_ref = tasks_ref.add(task_data)
-        
-        # Возвращаем созданную задачу с присвоенным ID
-        created_task = Task(id=doc_ref.id, **task_data)
-        return created_task
-    except Exception as e:
-        logging.error(f"Error creating task: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create task.")
+        doc_ref = db.collection("tasks").document(task_id)
+        doc = await doc_ref.get()
 
-@app.put("/tasks/{task_id}", response_model=Task, status_code=status.HTTP_200_OK)
-async def update_task(task_id: str, task_update: Task):
-    """Обновляет существующую задачу по ID для текущего пользователя."""
-    tasks_ref = get_collection_ref()
-    if tasks_ref is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Задача не найдена")
 
-    task_ref = tasks_ref.document(task_id)
-    
-    # Создаем словарь для обновления, включая только те поля, которые были предоставлены,
-    # и исключая метаданные/ID.
-    update_data = task_update.model_dump(exclude_unset=True, exclude={'id', 'created_at', 'updated_at'})
-    
-    if not update_data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
+        return Task(id=doc.id, **doc.to_dict())
 
-    update_data['updated_at'] = time.time()
-    
-    try:
-        # Проверяем, существует ли документ, прежде чем пытаться обновить (опционально, но безопасно)
-        if not task_ref.get().exists:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Task with ID {task_id} not found.")
-
-        task_ref.update(update_data)
-        
-        # Получаем обновленный документ, чтобы вернуть полный объект
-        updated_doc = task_ref.get()
-        updated_data = updated_doc.to_dict()
-        updated_task = Task(id=updated_doc.id, **updated_data)
-        return updated_task
-        
     except HTTPException:
-        # Перебрасываем 404
-        raise
+        raise # Повторно вызываем 404
     except Exception as e:
-        logging.error(f"Error updating task {task_id}: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update task.")
+        logging.error(f"Ошибка при получении задачи {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {e}")
 
+@app.put("/tasks/{task_id}", response_model=Task)
+async def update_task(task_id: str, task: TaskCreate):
+    """Обновляет существующую задачу по ее ID."""
+    if db is None:
+        raise HTTPException(status_code=500, detail="База данных не инициализирована.")
+
+    try:
+        doc_ref = db.collection("tasks").document(task_id)
+        
+        # Обновление данных
+        task_data = task.model_dump(exclude_unset=True) # exclude_unset=True исключает поля, не переданные в запросе
+        await doc_ref.update(task_data)
+
+        # Получаем обновленный документ для возврата
+        updated_doc = await doc_ref.get()
+        if not updated_doc.exists:
+            # Эта ветка должна быть недостижима, если update прошел успешно, но для безопасности
+            raise HTTPException(status_code=404, detail="Задача не найдена после обновления")
+            
+        return Task(id=updated_doc.id, **updated_doc.to_dict())
+
+    except NotFound: # Firestore выбрасывает NotFound, если документа нет
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении задачи {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {e}")
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(task_id: str):
-    """Удаляет задачу по ID для текущего пользователя."""
-    tasks_ref = get_collection_ref()
-    if tasks_ref is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not initialized.")
-
-    task_ref = tasks_ref.document(task_id)
+    """Удаляет задачу по ее ID."""
+    if db is None:
+        raise HTTPException(status_code=500, detail="База данных не инициализирована.")
     
     try:
-        # Проверяем существование перед удалением
-        if not task_ref.get().exists:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Task with ID {task_id} not found.")
-            
-        task_ref.delete()
-        return {} # 204 No Content обычно возвращает пустое тело
-        
-    except HTTPException:
-        raise
+        doc_ref = db.collection("tasks").document(task_id)
+        await doc_ref.delete()
+        # В Firestore delete() не выбрасывает исключение, если документа нет,
+        # поэтому мы просто возвращаем 204 No Content.
+        return {}
+    
     except Exception as e:
-        logging.error(f"Error deleting task {task_id}: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete task.")
+        logging.error(f"Ошибка при удалении задачи {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {e}")
 
-# --- Уведомление о необходимости запуска через Uvicorn ---
-if __name__ == '__main__':
-    logging.warning("API должен запускаться с помощью Uvicorn, например: uvicorn app:app --host 0.0.0.0 --port 8000")
-    logging.warning(f"Текущие заглушки: APP_ID={APP_ID}, USER_ID={USER_ID}. Измените их для реальной работы.")
-    # Для локального тестирования
-    # import uvicorn
-    # uvicorn.run(app, host="0.0.0.0", port=8000)
+# Дополнительный импорт для обработки ошибок Firestore
+from google.cloud.firestore.exceptions import NotFound # Добавлен импорт для более чистой обработки ошибок
